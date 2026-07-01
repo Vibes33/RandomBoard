@@ -58,7 +58,7 @@ def poll_42():
         return {"skipped": "aucune clé API configurée"}
     out = {}
     for pool in Pool.objects.filter(is_active=True):
-        data = fetch_live(client, campus_id=settings.FT_CAMPUS_ID)
+        data = fetch_live(client, campus_id=settings.FT_CAMPUS_ID, cursus_id=settings.FT_CURSUS_ID)
         out[pool.slug] = sync_all(pool, data)
     return out
 

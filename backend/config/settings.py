@@ -147,6 +147,8 @@ FT_API_CREDENTIALS = _ft_credentials()
 # Cible : piscine du Havre, session Juillet 2026
 _campus = env("FT_CAMPUS_ID", default="").strip()        # vide tant que non défini
 FT_CAMPUS_ID = int(_campus) if _campus else 0            # ID campus Le Havre (voir `ft_campuses`)
+_cursus = env("FT_CURSUS_ID", default="9").strip()       # 9 = "C Piscine" → isole la piscine
+FT_CURSUS_ID = int(_cursus) if _cursus else 9
 FT_POOL_YEAR = env("FT_POOL_YEAR", default="2026")
 FT_POOL_MONTH = env("FT_POOL_MONTH", default="july")     # nom anglais minuscule
 

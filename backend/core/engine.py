@@ -150,6 +150,15 @@ def ev_keywords(params, ctx, rng):
     return _d(total), roll
 
 
+def ev_map_lookup(params, ctx, rng):
+    """Cherche une clé du contexte dans une table (ex: flag de correction → points)."""
+    key = str(ctx.get(params.get("key_field", "key"), "")).lower()
+    for k, v in (params.get("map") or {}).items():
+        if k.lower() == key:
+            return _d(v), {"matched": k}
+    return _d(params.get("default", 0)), None
+
+
 EVALUATORS = {
     "fixed": ev_fixed,
     "linear_decay": ev_linear_decay,
@@ -162,6 +171,7 @@ EVALUATORS = {
     "from_context": ev_from_context,
     "weighted": ev_weighted,
     "keywords": ev_keywords,
+    "map_lookup": ev_map_lookup,
 }
 
 

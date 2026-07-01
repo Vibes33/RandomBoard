@@ -74,6 +74,18 @@ DEMO_RULES = [
     # ─── ajustement manuel par le staff (points fournis à la création) ───
     ("manual_adjust", "event", "Ajustement manuel (staff)",
      {"type": "from_context", "value_key": "points"}),
+    # ─── projets & corrections (issus de scale_teams) ───
+    ("shell_malus", "loss", "Rendre Shell 00 / Shell 01",
+     {"type": "fixed", "points": -60}),
+    ("rush_malus", "loss", "Rush (malus, énorme si note 0)",
+     {"type": "threshold_window", "value_key": "mark", "lo": 1, "hi": 125,
+      "in_points": -50, "out_points": -300}),
+    ("correction_flag", "loss", "Flag de correction (Empty work, Crash…)",
+     {"type": "map_lookup", "key_field": "flag", "default": 0,
+      "map": {"Empty work": -100, "Crash": -80, "Norme": -60,
+              "Can't explain": -80, "Cheat": -200}}),
+    ("project_random", "event", "Projet évalué (points random ±, au pif)",
+     {"type": "random_modifier", "base": 0, "rand_min": -50, "rand_max": 80}),
 ]
 
 # Coalitions des étudiants de démo (pour l'aura "1er de coalition")
