@@ -18,7 +18,7 @@ from django.utils import timezone
 
 from .engine import record_event
 from .models import (
-    AppUser, DailyCoefficient, EventLog, Rule, WeeklyDesignation,
+    AppUser, DailyCoefficient, DailyHost, EventLog, Rule, WeeklyDesignation, Workstation,
 )
 from .services import standings
 from .sync import _void_daily
@@ -143,6 +143,28 @@ def _daily_ranges():
         r = params.get(cat) or {}
         out[cat] = (float(r.get("min", default[0])), float(r.get("max", default[1])))
     return out
+
+
+def randomize_daily_hosts(pool, day=None, n=5, reseed=False):
+    """
+    Tire au sort n places Bénites (shiny) + n Maudites parmi les postes connus,
+    pour CE jour. reseed=True ⇒ nouveau tirage ; False ⇒ déterministe par jour.
+    """
+    day = day or timezone.localdate()
+    hosts = list(Workstation.objects.filter(pool=pool).values_list("hostname", flat=True))
+    if len(hosts) < 2:
+        return {"shiny": [], "cursed": []}
+    rng = random.Random(None if reseed else f"{pool.slug}:{day.isoformat()}:hosts")
+    rng.shuffle(hosts)
+    take = min(n, len(hosts) // 2)
+    shiny, cursed = hosts[:take], hosts[take:2 * take]
+
+    DailyHost.objects.filter(pool=pool, day=day).delete()
+    DailyHost.objects.bulk_create(
+        [DailyHost(pool=pool, day=day, hostname=h, kind="shiny") for h in shiny]
+        + [DailyHost(pool=pool, day=day, hostname=h, kind="cursed") for h in cursed]
+    )
+    return {"shiny": shiny, "cursed": cursed}
 
 
 def randomize_daily_coefficient(pool, day=None, reseed=False):

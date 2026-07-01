@@ -10,6 +10,8 @@ Convention : on ne snapshot QUE les jours clôturés (strictement < aujourd'hui)
 Le jour courant est toujours ajouté "en live" par standings().
 """
 import hashlib
+import random
+from collections import defaultdict
 from datetime import timedelta
 from decimal import Decimal
 
@@ -17,9 +19,48 @@ from django.db import transaction
 from django.db.models import Q, Sum
 from django.utils import timezone
 
-from .models import AppUser, DailyCoefficient, DailySnapshot, EventLog
+from .models import (
+    AppUser, DailyCoefficient, DailyEventMultiplier, DailySnapshot, EventLog, Rule,
+)
 
 ZERO = Decimal("0")
+ONE = Decimal("1")
+
+
+def day_multipliers(pool, day):
+    """Dict {rule_id: multiplicateur} pour un jour. Absent ⇒ 1."""
+    return {
+        rid: m for rid, m in
+        DailyEventMultiplier.objects.filter(pool=pool, day=day).values_list("rule_id", "multiplier")
+    }
+
+
+def adjust_user_score(user, pool, points, reason="", staff=None):
+    """Ajustement manuel de score par le staff → EventLog daté du jour (visible immédiatement)."""
+    rule = Rule.objects.filter(key="manual_adjust").first()
+    return EventLog.objects.create(
+        user=user, pool=pool, event_type="manual_adjust", source=EventLog.Source.MANUAL,
+        occurred_at=timezone.now(), event_date=timezone.localdate(),
+        rule=rule, rule_version=(rule.current_version.version if rule and rule.current_version else None),
+        raw_points=Decimal(str(points)),
+        raw_payload={"reason": reason, "by": getattr(staff, "username", "")},
+    )
+
+
+def randomize_day_multipliers(pool, day, rule_ids=None, reseed=True):
+    """Tire le multiplicateur de chaque event pour ce jour dans sa range [mult_min, mult_max]."""
+    rules = Rule.objects.filter(is_active=True)
+    if rule_ids:
+        rules = rules.filter(id__in=rule_ids)
+    n = 0
+    for rule in rules:
+        lo, hi = float(rule.mult_min), float(rule.mult_max)
+        rng = random.Random(None if reseed else f"{pool.slug}:{day}:{rule.key}")
+        val = Decimal(str(round(rng.uniform(lo, hi), 2))) if hi > lo else Decimal(str(lo))
+        DailyEventMultiplier.objects.update_or_create(
+            pool=pool, day=day, rule=rule, defaults={"multiplier": val})
+        n += 1
+    return n
 
 
 def get_coefficient(pool, day):
@@ -46,49 +87,41 @@ def _fingerprint(pool, day):
 @transaction.atomic
 def snapshot_day(pool, day):
     """
-    (Re)calcule les snapshots du jour, avec un multiplicateur PAR CATÉGORIE :
-        day_final = Σgains×coef_gain + Σpertes×coef_loss + Σevents×coef_event (+ autres ×1)
+    (Re)calcule les snapshots du jour : UN multiplicateur par (jour × type d'event).
+        day_final = Σ events [ raw_points × multiplier(jour, règle) ]  (absent ⇒ ×1)
     Idempotent ; suppose les jours antérieurs déjà à jour (cumul lu en base).
     """
-    coef = get_coefficient(pool, day)
-    cg, cl, ce = coef.coef_gain, coef.coef_loss, coef.coef_event
+    mults = day_multipliers(pool, day)
+    day_final = defaultdict(lambda: ZERO)
+    day_raw = defaultdict(lambda: ZERO)
+    for r in (EventLog.objects.filter(pool=pool, event_date=day, is_voided=False)
+              .values("user_id", "rule_id").annotate(s=Sum("raw_points"))):
+        s = r["s"] or ZERO
+        m = mults.get(r["rule_id"], ONE)
+        day_final[r["user_id"]] += s * m
+        day_raw[r["user_id"]] += s
 
-    agg = {
-        r["user_id"]: r
-        for r in EventLog.objects.filter(pool=pool, event_date=day, is_voided=False)
-        .values("user_id").annotate(
-            g=Sum("raw_points", filter=Q(rule__category="gain")),
-            l=Sum("raw_points", filter=Q(rule__category="loss")),
-            e=Sum("raw_points", filter=Q(rule__category="event")),
-            o=Sum("raw_points", filter=Q(rule__isnull=True)),  # sans règle → coef 1
-        )
-    }
     existing = set(
         DailySnapshot.objects.filter(pool=pool, day=day).values_list("user_id", flat=True)
     )
     fp = _fingerprint(pool, day)
 
     rows = []
-    for uid in set(agg) | existing:
-        r = agg.get(uid)
-        g = (r and r["g"]) or ZERO
-        l = (r and r["l"]) or ZERO
-        e = (r and r["e"]) or ZERO
-        o = (r and r["o"]) or ZERO
-        raw = g + l + e + o
-        day_final = g * cg + l * cl + e * ce + o
+    for uid in set(day_final) | existing:
+        raw = day_raw.get(uid, ZERO)
+        final = day_final.get(uid, ZERO)
         prev = (
             DailySnapshot.objects.filter(pool=pool, user_id=uid, day__lt=day)
             .order_by("-day").values_list("cumulative_total", flat=True).first()
         ) or ZERO
-        rows.append((uid, raw, day_final, prev + day_final))
+        rows.append((uid, raw, final, prev + final))
 
     rows.sort(key=lambda t: t[3], reverse=True)  # rang du jour par cumul
-    for rank, (uid, raw, day_final, cum) in enumerate(rows, start=1):
+    for rank, (uid, raw, final, cum) in enumerate(rows, start=1):
         DailySnapshot.objects.update_or_create(
             pool=pool, user_id=uid, day=day,
             defaults=dict(
-                day_raw_points=raw, day_coefficient=cg, day_final_points=day_final,
+                day_raw_points=raw, day_coefficient=ONE, day_final_points=final,
                 cumulative_total=cum, rank=rank, rules_fingerprint=fp,
             ),
         )
@@ -143,20 +176,16 @@ def standings(pool, include_today=True, limit=None):
         latest.setdefault(uid, cum)  # 1re occurrence = jour le plus récent
 
     if include_today:
-        coef = get_coefficient(pool, today)
-        cg, cl, ce = coef.coef_gain, coef.coef_loss, coef.coef_event
+        mults = day_multipliers(pool, today)
         live = (
             EventLog.objects.filter(pool=pool, event_date=today, is_voided=False)
-            .values("user_id").annotate(
-                g=Sum("raw_points", filter=Q(rule__category="gain")),
-                l=Sum("raw_points", filter=Q(rule__category="loss")),
-                e=Sum("raw_points", filter=Q(rule__category="event")),
-                o=Sum("raw_points", filter=Q(rule__isnull=True)),
-            )
+            .values("user_id", "rule_id").annotate(s=Sum("raw_points"))
         )
+        add = defaultdict(lambda: ZERO)
         for r in live:
-            day_final = (r["g"] or ZERO) * cg + (r["l"] or ZERO) * cl + (r["e"] or ZERO) * ce + (r["o"] or ZERO)
-            latest[r["user_id"]] = latest.get(r["user_id"], ZERO) + day_final
+            add[r["user_id"]] += (r["s"] or ZERO) * mults.get(r["rule_id"], ONE)
+        for uid, v in add.items():
+            latest[uid] = latest.get(uid, ZERO) + v
 
     logins = dict(AppUser.objects.filter(id__in=latest).values_list("id", "login"))
     rows = [

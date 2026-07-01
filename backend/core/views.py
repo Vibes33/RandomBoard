@@ -44,19 +44,42 @@ def _ansi(colored):
         "dim": f"{_ESC}2m" if colored else "",
         "indigo": c(99), "lav": c(147), "title": c(189), "cream": c(230),
         "gold": c(222), "silver": c(252), "bronze": c(180), "muted": c(103),
+        "green": c(150), "red": c(210),
     }
 
 
 def _render_board(pool, board, colored=True):
-    """Classement façon grimoire (Witch Hat Atelier) : rang + pseudo, sans score."""
+    """
+    Classement complet (Witch Hat Atelier), TOUS les participants en colonnes de 50
+    (donc jusqu'à 3 colonnes), avec les points à côté du pseudo.
+    """
     p = _ansi(colored)
+    COL = 50
+    lw = min(max((len(r["login"]) for r in board), default=6), 11)
+    pw = max((len(str(round(r["total"]))) for r in board), default=5)
+    pw = max(pw, 5)
+    n = len(board)
+    ncols = max(1, (n + COL - 1) // COL)
+    cellw = 4 + 1 + lw + 1 + pw  # rang(4) + login + points
+    total_w = ncols * cellw + (ncols - 1) * 3
+
+    def cell(r):
+        if r is None:
+            return " " * cellw
+        rank = r["rank"]
+        rc = {1: p["gold"], 2: p["silver"], 3: p["bronze"]}.get(rank, p["muted"])
+        pts = round(r["total"])
+        pcol = p["green"] if pts >= 0 else p["red"]
+        return (f"{rc}{rank:>4}{p['reset']} {p['cream']}{r['login'][:lw]:<{lw}}{p['reset']} "
+                f"{pcol}{pts:>{pw}}{p['reset']}")
 
     def divider():
-        return f"   {p['lav']}☽ {'─' * 32} ☾{p['reset']}"
+        return f"   {p['lav']}☽ {'─' * (total_w - 4)} ☾{p['reset']}"
 
     lines = [
         "",
-        f"   {p['title']}{p['bold']}✦ 42 - Leaderboard ✦{p['reset']}",
+        f"   {p['title']}{p['bold']}✦ 42 - Leaderboard ✦{p['reset']}"
+        f"   {p['muted']}{n} participants{p['reset']}",
         f"   {p['muted']}Piscine 2026 - promo Juillet{p['reset']}",
         divider(),
         "",
@@ -64,13 +87,11 @@ def _render_board(pool, board, colored=True):
 
     if not board:
         lines.append(f"     {p['dim']}(le grimoire est encore vierge…){p['reset']}")
-    for r in board:
-        rank = r["rank"]
-        star = {1: "✦", 2: "✧", 3: "✧"}.get(rank, "⋆")
-        rc = {1: p["gold"], 2: p["silver"], 3: p["bronze"]}.get(rank, p["muted"])
-        lines.append(
-            f"     {rc}{star} {rank:>2}{p['reset']}   {p['cream']}{r['login']}{p['reset']}"
-        )
+    else:
+        rows = COL if ncols > 1 else n
+        for i in range(rows):
+            parts = [cell(board[c * COL + i] if c * COL + i < n else None) for c in range(ncols)]
+            lines.append("   " + "   ".join(parts).rstrip())
 
     lines += [
         "",
@@ -95,8 +116,8 @@ def leaderboard_preview(request):
     if not pool:
         return HttpResponse("Aucune Piscine active.\n", content_type="text/plain")
 
-    # Score réel = cumul figé (snapshots) + jour courant en live
-    board = standings(pool, include_today=True, limit=50)
+    # Score réel = cumul figé (snapshots) + jour courant en live — TOUS les participants
+    board = standings(pool, include_today=True)
     colored = "plain" not in request.GET  # curl ...?plain pour couper les couleurs
     body = _render_board(pool, board, colored=colored)
     return HttpResponse(body, content_type="text/plain; charset=utf-8")

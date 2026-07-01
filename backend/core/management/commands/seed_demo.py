@@ -50,10 +50,10 @@ DEMO_RULES = [
     ("last_day_corrections", "event", "Dernier jour : corrections × 1000",
      {"type": "multiplier", "value_key": "correction_points", "factor": 1000}),
     # ─── règles avancées (contextuelles) ───
-    ("shiny_host", "gain", "Poste Shiny (bonus à la connexion)",
-     {"type": "from_context", "value_key": "points"}),
-    ("cursed_host", "loss", "Poste Maudit (malus à la connexion)",
-     {"type": "from_context", "value_key": "points"}),
+    ("shiny_host", "gain", "Place Bénite (Shiny) — bonus à la connexion",
+     {"type": "fixed", "min": 150, "max": 300}),
+    ("cursed_host", "loss", "Place Maudite — malus à la connexion",
+     {"type": "fixed", "min": -300, "max": -100}),
     ("binome_cursed", "loss", "Malédiction binôme — Maudit (×2 si croisé)",
      {"type": "weighted", "points": -120}),
     ("binome_blessed", "gain", "Malédiction binôme — Béni (×2 si croisé)",
@@ -128,6 +128,10 @@ class Command(BaseCommand):
             rule, _ = Rule.objects.get_or_create(
                 key=key, defaults=dict(category=category, label=label)
             )
+            # range de multiplicateur par défaut (éditable ensuite dans le panel)
+            if rule.mult_min == 1 and rule.mult_max == 1:
+                rule.mult_min, rule.mult_max = Decimal("0.5"), Decimal("2.0")
+                rule.save(update_fields=["mult_min", "mult_max"])
             cur = rule.current_version
             if cur is None:
                 RuleVersion.objects.create(rule=rule, version=1, params=params, valid_from=now)

@@ -21,7 +21,7 @@ from datetime import datetime, time as dtime, timedelta, timezone as dttz
 from django.utils import timezone
 
 from .engine import record_event
-from .models import AppUser, EventLog, HostConfig, Pool
+from .models import AppUser, DailyHost, EventLog, Pool, Workstation
 
 log = logging.getLogger(__name__)
 API = EventLog.Source.API_42
@@ -51,6 +51,9 @@ def sync_locations(pool, locations, users=None):
     users = users or _users(pool)
     minutes = defaultdict(float)
     hosts = defaultdict(list)
+    seen_hosts = set()
+    # places Bénites/Maudites du jour (cache par jour)
+    daily = {}
     created = 0
 
     for loc in locations:
@@ -62,8 +65,11 @@ def sync_locations(pool, locations, users=None):
             continue
         e = _parse(loc.get("end_at")) or timezone.now()
         day = timezone.localdate(b)
+        host = loc.get("host", "")
         minutes[(u.id, day)] += max(0.0, (e - b).total_seconds() / 60)
-        hosts[(u.id, day)].append(loc.get("host", ""))
+        hosts[(u.id, day)].append(host)
+        if host:
+            seen_hosts.add(host)
 
         # bonus connexion 23:50–23:59
         local = timezone.localtime(b)
@@ -73,14 +79,24 @@ def sync_locations(pool, locations, users=None):
                             dedup_key=f"midnight:{loc.get('id')}"):
                 created += 1
 
-        # poste Shiny / Maudit
-        hc = HostConfig.objects.filter(hostname=loc.get("host", ""), is_active=True).first()
-        if hc:
-            rule_key = "shiny_host" if hc.kind == HostConfig.Kind.SHINY else "cursed_host"
-            if record_event(user=u, pool=pool, rule_key=rule_key, occurred_at=b,
-                            context={"points": hc.params.get("points", 0), "host": hc.hostname},
-                            source=API, dedup_key=f"host:{loc.get('id')}"):
-                created += 1
+        # place Bénite / Maudite DU JOUR
+        if host:
+            if day not in daily:
+                daily[day] = {dh.hostname: dh.kind for dh in
+                              DailyHost.objects.filter(pool=pool, day=day)}
+            kind = daily[day].get(host)
+            if kind:
+                rule_key = "shiny_host" if kind == "shiny" else "cursed_host"
+                if record_event(user=u, pool=pool, rule_key=rule_key, occurred_at=b,
+                                context={"host": host}, source=API,
+                                dedup_key=f"host:{loc.get('id')}"):
+                    created += 1
+
+    # registre des postes connus (pool de tirage des places)
+    if seen_hosts:
+        Workstation.objects.bulk_create(
+            [Workstation(pool=pool, hostname=h, last_seen=timezone.localdate()) for h in seen_hosts],
+            ignore_conflicts=True)
 
     id_to_user = {u.id: u for u in users.values()}
     for (uid, day), mins in minutes.items():

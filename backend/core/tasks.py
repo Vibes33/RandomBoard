@@ -37,16 +37,18 @@ def weekly_designations():
 def daily_derived():
     """Calculs dérivés du jour : coef aléatoire + week-end, ancienneté, aura."""
     from .derived import (
-        apply_aura_penalty, apply_seniority,
-        ensure_weekend_coefficients, randomize_daily_coefficient,
+        apply_aura_penalty, apply_seniority, ensure_weekend_coefficients,
+        randomize_daily_coefficient, randomize_daily_hosts,
     )
     out = {}
     for pool in Pool.objects.filter(is_active=True):
         coef = randomize_daily_coefficient(pool)   # random du jour courant
         ensure_weekend_coefficients(pool)          # écrase si le jour est un week-end
+        hosts = randomize_daily_hosts(pool)        # 5 Bénites + 5 Maudites du jour
         weeks, _ = apply_seniority(pool)
         auras = apply_aura_penalty(pool)
-        out[pool.slug] = {"coef": str(coef), "weeks": weeks, "auras": auras}
+        out[pool.slug] = {"coef": str(coef), "weeks": weeks,
+                          "hosts": len(hosts["shiny"]) + len(hosts["cursed"]), "auras": auras}
     return out
 
 

@@ -1,0 +1,237 @@
+"""
+Panel admin — API JSON (reconstruite de zéro).
+
+5 onglets : Users · Logs · Options de Points · Gestion par Jour · Places & Hosts.
+Tout est staff-only + CSRF, opère sur la Piscine active.
+
+Modèle de scoring : UN multiplicateur par (jour × type d'event).
+    day_final = Σ events [ raw_points × multiplier(jour, règle) ]   (absent ⇒ ×1)
+"""
+import json
+from datetime import date, timedelta
+from decimal import Decimal, InvalidOperation
+
+from django.contrib.admin.views.decorators import staff_member_required
+from django.http import HttpResponseBadRequest, JsonResponse
+from django.shortcuts import render
+from django.views.decorators.csrf import ensure_csrf_cookie
+from django.views.decorators.http import require_http_methods
+
+from .derived import randomize_daily_hosts
+from .engine import new_rule_version
+from .models import (
+    AppUser, DailyEventMultiplier, DailyHost, EventLog, Pool, Rule, Workstation,
+)
+from .services import (
+    adjust_user_score, day_multipliers, randomize_day_multipliers,
+    recompute_from, standings,
+)
+
+
+# ─────────────────────────── helpers ───────────────────────────
+def _pool():
+    return Pool.objects.filter(is_active=True).order_by("-starts_on").first()
+
+
+def _json(request):
+    try:
+        return json.loads(request.body or "{}")
+    except json.JSONDecodeError:
+        return {}
+
+
+def _dec(value):
+    return Decimal(str(value))
+
+
+def _rule_cards(pool=None):
+    """Sérialise les règles (base range + multiplier range) pour les onglets Points/Jour."""
+    cards = []
+    for r in Rule.objects.filter(is_active=True).order_by("category", "label"):
+        p = r.current_version.params if r.current_version else {}
+        cards.append({
+            "id": r.id, "key": r.key, "label": r.label, "category": r.category,
+            "computed": p.get("type") not in ("fixed", None),
+            "base_min": p.get("min"), "base_max": p.get("max"),
+            "mult_min": float(r.mult_min), "mult_max": float(r.mult_max),
+        })
+    return cards
+
+
+# ─────────────────────────── page ───────────────────────────
+@staff_member_required
+@ensure_csrf_cookie
+def panel(request):
+    pool = _pool()
+    return render(request, "core/panel.html", {
+        "pool": pool,
+        "pool_period": (f"{pool.starts_on:%d/%m/%Y} → {pool.ends_on:%d/%m/%Y}" if pool else "—"),
+    })
+
+
+# ─────────────────────────── 1. Users ───────────────────────────
+@staff_member_required
+def api_users(request):
+    pool = _pool()
+    if not pool:
+        return JsonResponse({"users": []})
+    board = {r["login"]: r for r in standings(pool, include_today=True)}
+    users = []
+    for u in AppUser.objects.filter(pool=pool):
+        b = board.get(u.login)
+        users.append({"id": u.id, "login": u.login, "name": u.display_name,
+                      "total": round(b["total"]) if b else 0})
+    users.sort(key=lambda x: x["total"], reverse=True)
+    for i, u in enumerate(users, 1):
+        u["rank"] = i
+    return JsonResponse({"users": users})
+
+
+@staff_member_required
+@require_http_methods(["POST"])
+def api_user_adjust(request, user_id):
+    pool = _pool()
+    data = _json(request)
+    try:
+        points = _dec(data.get("points"))
+    except (InvalidOperation, TypeError):
+        return HttpResponseBadRequest("Nombre de points invalide.")
+    user = AppUser.objects.filter(id=user_id, pool=pool).first()
+    if not user:
+        return HttpResponseBadRequest("Étudiant introuvable.")
+    adjust_user_score(user, pool, points, reason=data.get("reason", ""), staff=request.user)
+    board = {r["login"]: r for r in standings(pool, include_today=True)}
+    b = board.get(user.login)
+    return JsonResponse({"ok": True, "total": round(b["total"]) if b else 0})
+
+
+# ─────────────────────────── 2. Logs ───────────────────────────
+@staff_member_required
+def api_logs(request):
+    pool = _pool()
+    if not pool:
+        return JsonResponse({"logs": [], "users": [], "events": []})
+    qs = EventLog.objects.filter(pool=pool, is_voided=False).select_related("user")
+    if request.GET.get("user"):
+        qs = qs.filter(user__login=request.GET["user"])
+    if request.GET.get("event"):
+        qs = qs.filter(event_type=request.GET["event"])
+    logs = [{
+        "at": e.occurred_at.strftime("%d/%m %H:%M"), "login": e.user.login,
+        "event": e.event_type, "source": e.source,
+        "points": float(e.raw_points), "day": e.event_date.strftime("%d/%m"),
+    } for e in qs.order_by("-occurred_at")[:400]]
+    return JsonResponse({
+        "logs": logs,
+        "users": list(AppUser.objects.filter(pool=pool).order_by("login")
+                      .values_list("login", flat=True)),
+        "events": list(EventLog.objects.filter(pool=pool)
+                       .values_list("event_type", flat=True).distinct().order_by("event_type")),
+    })
+
+
+# ─────────────────────── 3. Options de Points ───────────────────────
+@staff_member_required
+@require_http_methods(["GET", "POST"])
+def api_points(request):
+    if request.method == "GET":
+        return JsonResponse({"rules": _rule_cards()})
+
+    data = _json(request)
+    rule = Rule.objects.filter(id=data.get("id")).first()
+    if not rule:
+        return HttpResponseBadRequest("Règle introuvable.")
+    try:
+        rule.mult_min = _dec(data.get("mult_min", rule.mult_min))
+        rule.mult_max = _dec(data.get("mult_max", rule.mult_max))
+    except InvalidOperation:
+        return HttpResponseBadRequest("Range de multiplicateur invalide.")
+    rule.save(update_fields=["mult_min", "mult_max"])
+
+    if data.get("base_min") not in (None, "") and data.get("base_max") not in (None, ""):
+        cur = rule.current_version
+        params = dict(cur.params) if cur else {"type": "fixed"}
+        params["min"], params["max"] = float(data["base_min"]), float(data["base_max"])
+        params.pop("points", None)
+        new_rule_version(rule, params, user=request.user)
+    return JsonResponse({"ok": True})
+
+
+# ─────────────────────── 4. Gestion par Jour ───────────────────────
+@staff_member_required
+@require_http_methods(["GET", "POST"])
+def api_days(request):
+    pool = _pool()
+    if not pool:
+        return JsonResponse({"days": []})
+
+    if request.method == "GET":
+        days, d = [], pool.starts_on
+        while d <= pool.ends_on:
+            days.append(str(d))
+            d += timedelta(days=1)
+        out = {"days": days}
+        if request.GET.get("date"):
+            try:
+                day = date.fromisoformat(request.GET["date"])
+            except ValueError:
+                return HttpResponseBadRequest("Date invalide.")
+            mults = day_multipliers(pool, day)
+            out["date"] = request.GET["date"]
+            out["items"] = [{**c, "multiplier": float(mults.get(c["id"], 1))}
+                            for c in _rule_cards()]
+        return JsonResponse(out)
+
+    data = _json(request)
+    try:
+        day = date.fromisoformat(data.get("date", ""))
+    except ValueError:
+        return HttpResponseBadRequest("Date invalide (AAAA-MM-JJ).")
+
+    if data.get("action") == "randomize":
+        randomize_day_multipliers(pool, day, rule_ids=data.get("rule_ids"), reseed=True)
+    else:
+        rule = Rule.objects.filter(id=data.get("rule_id")).first()
+        if not rule:
+            return HttpResponseBadRequest("Règle introuvable.")
+        try:
+            value = _dec(data.get("multiplier"))
+        except (InvalidOperation, TypeError):
+            return HttpResponseBadRequest("Multiplicateur invalide.")
+        DailyEventMultiplier.objects.update_or_create(
+            pool=pool, day=day, rule=rule, defaults={"multiplier": value})
+
+    recompute_from(pool, day)  # applique aux scores à partir de ce jour
+    return JsonResponse({"ok": True})
+
+
+# ─────────────────────── 5. Places & Hosts (5 Bénites + 5 Maudites / jour) ───────────────────────
+@staff_member_required
+@require_http_methods(["GET", "POST"])
+def api_hosts(request):
+    pool = _pool()
+    if not pool:
+        return JsonResponse({"days": [], "shiny": [], "cursed": []})
+
+    if request.method == "POST":
+        data = _json(request)
+        try:
+            day = date.fromisoformat(data.get("date", ""))
+        except ValueError:
+            return HttpResponseBadRequest("Date invalide.")
+        randomize_daily_hosts(pool, day, reseed=True)
+        return JsonResponse({"ok": True})
+
+    days, d = [], pool.starts_on
+    while d <= pool.ends_on:
+        days.append(str(d))
+        d += timedelta(days=1)
+    out = {"days": days, "candidates": Workstation.objects.filter(pool=pool).count()}
+    date_str = request.GET.get("date") or (days[-1] if days else None)
+    if date_str:
+        day = date.fromisoformat(date_str)
+        dh = list(DailyHost.objects.filter(pool=pool, day=day))
+        out["date"] = date_str
+        out["shiny"] = sorted(h.hostname for h in dh if h.kind == "shiny")
+        out["cursed"] = sorted(h.hostname for h in dh if h.kind == "cursed")
+    return JsonResponse(out)

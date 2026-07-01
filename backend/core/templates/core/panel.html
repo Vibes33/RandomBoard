@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chaos 42 · Panel Admin</title>
+<style>
+  :root{
+    --bg:#070b0a; --panel:rgba(24,32,28,.62); --panel-2:rgba(32,42,36,.5);
+    --line:rgba(255,255,255,.08); --line-hi:rgba(143,224,58,.22);
+    --txt:#eaf2ec; --muted:rgba(234,242,236,.56); --faint:rgba(234,242,236,.34);
+    --green:#8fe03a; --green-b:#c8ff4d; --blue:#4aa3ff; --red:#ff5f5f; --gold:#e9c53b;
+    --r:16px; --ease:cubic-bezier(.22,1,.36,1);
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,"SF Pro Display",system-ui,sans-serif;color:var(--txt);background:var(--bg);
+    background-image:radial-gradient(1200px 640px at 82% -12%,rgba(143,224,58,.10),transparent 60%),
+      radial-gradient(900px 520px at 8% 118%,rgba(74,163,255,.06),transparent 55%),
+      radial-gradient(circle at center,rgba(255,255,255,.02) 1px,transparent 1.4px);
+    background-size:auto,auto,22px 22px;-webkit-font-smoothing:antialiased;min-height:100vh;padding:22px 28px 70px}
+  a{color:inherit;text-decoration:none}
+
+  header{display:flex;align-items:center;gap:14px;margin-bottom:20px}
+  .logo{width:38px;height:38px;border-radius:11px;display:grid;place-items:center;font-size:18px;
+    background:linear-gradient(140deg,var(--green),#4fae1f);color:#0b1206;box-shadow:0 6px 22px rgba(143,224,58,.34)}
+  header h1{font-size:16px;font-weight:600}header p{font-size:12px;color:var(--muted)}
+  .grow{flex:1}
+  .lnk{padding:8px 13px;border:1px solid var(--line);border-radius:10px;font-size:13px;color:var(--muted);
+    background:var(--panel);transition:.2s}
+  .lnk:hover{color:var(--txt);border-color:var(--line-hi)}
+
+  .tabs{display:flex;gap:4px;background:var(--panel);border:1px solid var(--line);border-radius:14px;
+    padding:5px;margin-bottom:22px;width:fit-content;flex-wrap:wrap}
+  .tab{padding:9px 18px;font-size:14px;color:var(--muted);cursor:pointer;border-radius:10px;transition:.2s;user-select:none}
+  .tab:hover{color:var(--txt)}
+  .tab.on{color:#0b1206;background:linear-gradient(180deg,var(--green-b),var(--green));font-weight:600}
+  .pane{display:none}.pane.on{display:block;animation:fade .4s var(--ease)}
+  @keyframes fade{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);backdrop-filter:blur(16px)}
+  .sec{font-size:12px;letter-spacing:.5px;color:var(--muted);text-transform:uppercase;margin-bottom:14px}
+  .bar{display:flex;align-items:center;gap:12px;margin-bottom:16px;flex-wrap:wrap}
+
+  input,select{background:rgba(0,0,0,.28);border:1px solid var(--line);border-radius:9px;color:var(--txt);
+    padding:8px 11px;font-size:13px;font-family:inherit;outline:none;transition:border-color .2s}
+  input:focus,select:focus{border-color:var(--green)}
+  input[type=number]{width:82px;text-align:right}
+  button{cursor:pointer;font-family:inherit;border-radius:9px;padding:8px 15px;font-size:13px;font-weight:600;
+    background:linear-gradient(180deg,rgba(143,224,58,.22),rgba(143,224,58,.08));color:var(--green-b);
+    border:1px solid var(--line-hi);transition:transform .18s,box-shadow .18s}
+  button:hover{transform:translateY(-1px);box-shadow:0 6px 18px rgba(143,224,58,.16)}
+  button.ghost{background:rgba(255,255,255,.05);color:var(--muted);border-color:var(--line)}
+  button.mini{padding:6px 11px;font-size:12px}
+  button:active{transform:translateY(0)}
+
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th{text-align:left;color:var(--faint);font-weight:600;font-size:11px;text-transform:uppercase;
+    padding:10px 14px;border-bottom:1px solid var(--line)}
+  td{padding:10px 14px;border-bottom:1px solid rgba(255,255,255,.045)}
+  tr:hover td{background:rgba(255,255,255,.022)}
+  .rk{width:42px;color:var(--faint);font-weight:700;font-variant-numeric:tabular-nums}
+  tr:nth-child(1) .rk{color:var(--gold)}
+  .num{font-variant-numeric:tabular-nums;font-weight:680;text-align:right}
+  .pos{color:var(--green)}.neg{color:var(--red)}
+  .chip{display:inline-block;padding:2px 9px;border-radius:6px;font-size:11px;font-weight:600}
+  .chip.gain{background:rgba(143,224,58,.15);color:var(--green)}
+  .chip.loss{background:rgba(255,95,95,.15);color:var(--red)}
+  .chip.event{background:rgba(74,163,255,.15);color:var(--blue)}
+
+  .bento{display:grid;grid-template-columns:repeat(auto-fill,minmax(290px,1fr));gap:14px}
+  .box{padding:17px;border-radius:var(--r);background:var(--panel);border:1px solid var(--line);
+    transition:border-color .25s,transform .25s var(--ease)}
+  .box:hover{border-color:var(--line-hi);transform:translateY(-2px)}
+  .box .title{font-size:14px;font-weight:600}
+  .box .key{font-size:11px;color:var(--faint);margin:2px 0 13px;display:flex;gap:7px;align-items:center}
+  .row-in{display:flex;align-items:center;gap:8px;margin-bottom:9px}
+  .row-in label{font-size:12px;color:var(--muted);width:118px}
+  .row-in .arrow{color:var(--faint)}
+  .box .foot{display:flex;align-items:center;gap:8px;margin-top:12px}
+  .ok{color:var(--green);font-size:12px;opacity:0;transition:opacity .3s}.ok.show{opacity:1}
+  .calc{font-size:12px;color:var(--faint);font-style:italic}
+
+  .cols{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media(max-width:920px){.cols{grid-template-columns:1fr}}
+  .host{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:11px 15px;border-bottom:1px solid rgba(255,255,255,.05)}
+  .host .hn{font-weight:600}.host .meta{font-size:11px;color:var(--faint)}
+  .hdr{padding:14px 16px;border-bottom:1px solid var(--line);font-weight:600}
+  .empty{color:var(--faint);text-align:center;padding:26px;font-size:13px}
+  .spin{color:var(--faint);text-align:center;padding:26px;font-size:13px}
+
+  #toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%) translateY(30px);opacity:0;
+    background:var(--panel-2);border:1px solid var(--line-hi);color:var(--txt);padding:11px 20px;border-radius:12px;
+    font-size:13px;backdrop-filter:blur(14px);transition:.3s var(--ease);z-index:50;box-shadow:0 10px 30px rgba(0,0,0,.4)}
+  #toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+  #toast.err{border-color:var(--red);color:#ffd4d4}
+</style>
+</head>
+<body>
+  <header>
+    <div class="logo">⚡</div>
+    <div><h1>Chaos 42 — Panel Admin</h1><p>{{ pool.name|default:"Aucune piscine active" }} · {{ pool_period }}</p></div>
+    <div class="grow"></div>
+    <a class="lnk" href="/dashboard/">📊 Dashboard</a>
+    <a class="lnk" href="/admin/django_celery_beat/periodictask/">⏰ Crontabs</a>
+    <a class="lnk" href="/admin/">⚙︎ Admin Django</a>
+  </header>
+
+  <div class="tabs">
+    <div class="tab on" data-tab="users">👥 Users</div>
+    <div class="tab" data-tab="logs">📜 Logs</div>
+    <div class="tab" data-tab="points">🎯 Options de Points</div>
+    <div class="tab" data-tab="days">📅 Gestion par Jour</div>
+    <div class="tab" data-tab="hosts">🖥 Places &amp; Hosts</div>
+  </div>
+
+  <section class="pane on" id="p-users">
+    <div class="sec">Classement &amp; ajustement manuel des scores</div>
+    <div class="card"><table><thead><tr>
+      <th class="rk">#</th><th>Login</th><th>Nom</th><th class="num">Score</th><th style="width:210px">Ajuster</th>
+    </tr></thead><tbody id="users-tb"><tr><td colspan="5" class="spin">Chargement…</td></tr></tbody></table></div>
+  </section>
+
+  <section class="pane" id="p-logs">
+    <div class="bar">
+      <span class="sec" style="margin:0">Filtrer</span>
+      <select id="f-user"><option value="">Tous les users</option></select>
+      <select id="f-event"><option value="">Tous les events</option></select>
+      <button class="mini" id="f-apply">Appliquer</button>
+    </div>
+    <div class="card"><table><thead><tr>
+      <th>Date</th><th>Login</th><th>Event</th><th>Source</th><th>Jour</th><th class="num">Points</th>
+    </tr></thead><tbody id="logs-tb"><tr><td colspan="6" class="spin">Chargement…</td></tr></tbody></table></div>
+  </section>
+
+  <section class="pane" id="p-points">
+    <div class="sec">Range de points de base &amp; range du multiplicateur journalier — par event</div>
+    <div class="bento" id="points-b"><div class="spin">Chargement…</div></div>
+  </section>
+
+  <section class="pane" id="p-days">
+    <div class="bar">
+      <span class="sec" style="margin:0">Jour</span>
+      <select id="day-pick"></select>
+      <button class="mini" id="rand-all">🎲 Randomize tout le jour</button>
+      <span class="calc">Un seul multiplicateur par event. Chaque modif recalcule les scores.</span>
+    </div>
+    <div class="bento" id="days-b"><div class="empty">Sélectionne un jour…</div></div>
+  </section>
+
+  <section class="pane" id="p-hosts">
+    <div class="bar">
+      <span class="sec" style="margin:0">Jour</span>
+      <select id="host-day"></select>
+      <button class="mini" id="host-rand">🎲 Re-tirer les places du jour</button>
+      <span class="calc" id="host-info"></span>
+    </div>
+    <div class="cols">
+      <div class="card">
+        <div class="hdr" style="color:var(--gold)">✦ 5 Places Bénites (Shiny)</div>
+        <div id="h-shiny"><div class="spin">Chargement…</div></div>
+      </div>
+      <div class="card">
+        <div class="hdr" style="color:var(--red)">☠ 5 Places Maudites</div>
+        <div id="h-cursed"><div class="spin">Chargement…</div></div>
+      </div>
+    </div>
+  </section>
+
+  <div id="toast"></div>
+
+<script>
+const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
+const cookie=n=>(document.cookie.match('(^|;)\\s*'+n+'\\s*=\\s*([^;]+)')||[])[2];
+let toastT;
+function toast(msg,err=false){
+  const t=$('#toast');t.textContent=msg;t.className='show'+(err?' err':'');
+  clearTimeout(toastT);toastT=setTimeout(()=>t.className='',2200);
+}
+async function api(url,method='GET',body=null){
+  const o={method,headers:{'Content-Type':'application/json'}};
+  if(method!=='GET'){o.headers['X-CSRFToken']=cookie('csrftoken');o.body=JSON.stringify(body||{});}
+  const r=await fetch(url,o);
+  if(!r.ok){const t=await r.text();toast(t.slice(0,120)||('Erreur '+r.status),true);throw new Error(t);}
+  return r.json();
+}
+const money=v=>`<span class="${v>=0?'pos':'neg'}">${v>=0?'+':''}${Math.round(v)}</span>`;
+const chip=c=>`<span class="chip ${c}">${c}</span>`;
+
+/* ── tabs (lazy) ── */
+const inited={};
+const init={users:loadUsers,logs:initLogs,points:loadPoints,days:initDays,hosts:initHosts};
+$$('.tab').forEach(t=>t.onclick=()=>{
+  $$('.tab').forEach(x=>x.classList.toggle('on',x===t));
+  $$('.pane').forEach(p=>p.classList.toggle('on',p.id==='p-'+t.dataset.tab));
+  if(!inited[t.dataset.tab]){inited[t.dataset.tab]=1;init[t.dataset.tab]();}
+});
+
+/* ── 1. Users ── */
+async function loadUsers(){
+  const {users}=await api('/panel/api/users');
+  const tb=$('#users-tb');
+  tb.innerHTML=users.length?users.map(u=>`<tr>
+    <td class="rk">${u.rank}</td><td><b>${u.login}</b></td><td class="meta">${u.name||''}</td>
+    <td class="num">${money(u.total)}</td>
+    <td><input type="number" placeholder="± pts" style="width:88px" id="adj-${u.id}">
+        <button class="mini" data-adj="${u.id}">OK</button></td></tr>`).join('')
+    :'<tr><td colspan="5" class="empty">Aucun étudiant.</td></tr>';
+  tb.querySelectorAll('[data-adj]').forEach(b=>b.onclick=()=>adjust(b.dataset.adj));
+}
+async function adjust(id){
+  const v=parseFloat($('#adj-'+id).value); if(isNaN(v)){toast('Entre un nombre',true);return;}
+  const reason=prompt('Raison de l\'ajustement ?','ajustement manuel'); if(reason===null)return;
+  const r=await api('/panel/api/users/'+id+'/adjust','POST',{points:v,reason});
+  toast('Score ajusté → '+r.total); loadUsers();
+}
+
+/* ── 2. Logs ── */
+async function initLogs(){
+  const d=await api('/panel/api/logs');
+  $('#f-user').innerHTML='<option value="">Tous les users</option>'+d.users.map(u=>`<option>${u}</option>`).join('');
+  $('#f-event').innerHTML='<option value="">Tous les events</option>'+d.events.map(e=>`<option>${e}</option>`).join('');
+  $('#f-apply').onclick=loadLogs;
+  renderLogs(d.logs);
+}
+async function loadLogs(){
+  const d=await api(`/panel/api/logs?user=${encodeURIComponent($('#f-user').value)}&event=${encodeURIComponent($('#f-event').value)}`);
+  renderLogs(d.logs);
+}
+function renderLogs(logs){
+  $('#logs-tb').innerHTML=logs.length?logs.map(l=>`<tr><td class="meta">${l.at}</td><td><b>${l.login}</b></td>
+    <td>${l.event}</td><td class="meta">${l.source}</td><td class="meta">${l.day}</td>
+    <td class="num">${money(l.points)}</td></tr>`).join('')
+    :'<tr><td colspan="6" class="empty">Aucun log.</td></tr>';
+}
+
+/* ── 3. Options de Points (Bento) ── */
+async function loadPoints(){
+  const {rules}=await api('/panel/api/points');
+  $('#points-b').innerHTML=rules.map(r=>`<div class="box">
+    <div class="title">${r.label}</div><div class="key">${r.key} ${chip(r.category)}</div>
+    <div class="row-in"><label>Points base</label>
+      ${r.computed
+        ? '<span class="calc">calculé (règle spéciale)</span>'
+        : `<input type="number" id="bmin-${r.id}" value="${r.base_min??''}" placeholder="min">
+           <span class="arrow">→</span>
+           <input type="number" id="bmax-${r.id}" value="${r.base_max??''}" placeholder="max">`}</div>
+    <div class="row-in"><label>Range multiplic.</label>
+      <input type="number" step="0.1" id="mmin-${r.id}" value="${r.mult_min}">
+      <span class="arrow">→</span>
+      <input type="number" step="0.1" id="mmax-${r.id}" value="${r.mult_max}"></div>
+    <div class="foot"><button class="mini" data-save="${r.id}" data-calc="${r.computed}">💾 Sauvegarder</button>
+      <span class="ok" id="ok-${r.id}">✓ enregistré</span></div>
+  </div>`).join('');
+  $('#points-b').querySelectorAll('[data-save]').forEach(b=>b.onclick=()=>savePoints(b.dataset.save,b.dataset.calc==='true'));
+}
+async function savePoints(id,computed){
+  const body={id,mult_min:$('#mmin-'+id).value,mult_max:$('#mmax-'+id).value};
+  if(!computed){body.base_min=$('#bmin-'+id).value;body.base_max=$('#bmax-'+id).value;}
+  await api('/panel/api/points','POST',body);
+  const ok=$('#ok-'+id);ok.classList.add('show');setTimeout(()=>ok.classList.remove('show'),1600);
+  toast('Règle enregistrée');
+}
+
+/* ── 4. Gestion par Jour ── */
+async function initDays(){
+  const d=await api('/panel/api/days');
+  $('#day-pick').innerHTML=d.days.map(x=>`<option>${x}</option>`).join('');
+  $('#day-pick').onchange=loadDay;
+  $('#rand-all').onclick=async()=>{await api('/panel/api/days','POST',{date:$('#day-pick').value,action:'randomize'});toast('Jour re-randomisé + scores recalculés');loadDay();};
+  if(d.days.length)loadDay();
+}
+async function loadDay(){
+  const date=$('#day-pick').value;
+  const d=await api('/panel/api/days?date='+date);
+  $('#days-b').innerHTML=d.items.map(m=>`<div class="box">
+    <div class="title">${m.label}</div><div class="key">${m.key} ${chip(m.category)}</div>
+    <div class="row-in"><label>Multiplicateur</label>
+      <input type="number" step="0.01" id="dm-${m.id}" value="${m.multiplier}">
+      <button class="mini" data-set="${m.id}">OK</button>
+      <button class="mini ghost" data-rnd="${m.id}" title="range ${m.mult_min}–${m.mult_max}">🎲</button></div>
+    <span class="ok" id="dok-${m.id}">✓ appliqué</span>
+  </div>`).join('');
+  $('#days-b').querySelectorAll('[data-set]').forEach(b=>b.onclick=()=>setMult(b.dataset.set));
+  $('#days-b').querySelectorAll('[data-rnd]').forEach(b=>b.onclick=()=>randOne(b.dataset.rnd));
+}
+async function setMult(id){
+  await api('/panel/api/days','POST',{date:$('#day-pick').value,rule_id:id,multiplier:$('#dm-'+id).value});
+  const ok=$('#dok-'+id);ok.classList.add('show');setTimeout(()=>ok.classList.remove('show'),1600);
+  toast('Multiplicateur appliqué + scores recalculés');
+}
+async function randOne(id){
+  await api('/panel/api/days','POST',{date:$('#day-pick').value,action:'randomize',rule_ids:[Number(id)]});
+  loadDay();toast('Multiplicateur re-randomisé');
+}
+
+/* ── 5. Places & Hosts (5 Bénites + 5 Maudites / jour) ── */
+async function initHosts(){
+  const d=await api('/panel/api/hosts');
+  $('#host-day').innerHTML=d.days.map(x=>`<option>${x}</option>`).join('');
+  if(d.days.length)$('#host-day').value=d.days[d.days.length-1];
+  $('#host-day').onchange=()=>loadHosts();
+  $('#host-rand').onclick=async()=>{await api('/panel/api/hosts','POST',{date:$('#host-day').value});toast('Places re-tirées');loadHosts();};
+  loadHosts();
+}
+async function loadHosts(){
+  const d=await api('/panel/api/hosts?date='+$('#host-day').value);
+  $('#host-info').textContent=(d.candidates||0)+' postes connus';
+  const row=h=>`<div class="host"><span class="hn">${h}</span></div>`;
+  $('#h-shiny').innerHTML=d.shiny&&d.shiny.length?d.shiny.map(row).join(''):'<div class="empty">Aucune — lance un tirage 🎲</div>';
+  $('#h-cursed').innerHTML=d.cursed&&d.cursed.length?d.cursed.map(row).join(''):'<div class="empty">Aucune — lance un tirage 🎲</div>';
+}
+
+/* init premier onglet */
+inited.users=1; loadUsers();
+</script>
+</body>
+</html>

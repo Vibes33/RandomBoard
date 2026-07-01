@@ -74,6 +74,9 @@ class Rule(models.Model):
     label = models.CharField(max_length=160)
     description = models.TextField(blank=True)
     is_active = models.BooleanField(default=True)
+    # Range du multiplicateur journalier de CET event (onglet "Options de Points")
+    mult_min = models.DecimalField(max_digits=6, decimal_places=2, default=1)
+    mult_max = models.DecimalField(max_digits=6, decimal_places=2, default=1)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -144,6 +147,27 @@ class DailyCoefficient(models.Model):
 
     def __str__(self):
         return f"{self.day} (g×{self.coef_gain} p×{self.coef_loss} e×{self.coef_event})"
+
+
+class DailyEventMultiplier(models.Model):
+    """
+    UN multiplicateur par (jour × type d'event). C'est le modèle du panel :
+    day_final = Σ events [ raw_points × multiplier(jour, règle de l'event) ].
+    Absence de ligne ⇒ multiplicateur = 1.
+    """
+    pool = models.ForeignKey(Pool, on_delete=models.CASCADE, related_name="event_multipliers")
+    day = models.DateField(db_index=True)
+    rule = models.ForeignKey(Rule, on_delete=models.CASCADE, related_name="daily_multipliers")
+    multiplier = models.DecimalField(max_digits=8, decimal_places=4, default=1)
+
+    class Meta:
+        verbose_name = "Multiplicateur jour × event"
+        verbose_name_plural = "Multiplicateurs jour × event"
+        unique_together = ("pool", "day", "rule")
+        ordering = ("-day", "rule")
+
+    def __str__(self):
+        return f"{self.day} · {self.rule.key} × {self.multiplier}"
 
 
 # ────────────────────────────────────────────────────────────────────
@@ -273,6 +297,43 @@ class HostConfig(models.Model):
 
     def __str__(self):
         return f"{self.hostname} ({self.kind})"
+
+
+class Workstation(models.Model):
+    """Registre des postes connus (alimenté par les locations) — pool de tirage des places."""
+    pool = models.ForeignKey(Pool, on_delete=models.CASCADE, related_name="workstations")
+    hostname = models.CharField(max_length=120)
+    last_seen = models.DateField(null=True, blank=True)
+
+    class Meta:
+        verbose_name = "Poste (workstation)"
+        verbose_name_plural = "Postes (workstations)"
+        unique_together = ("pool", "hostname")
+
+    def __str__(self):
+        return self.hostname
+
+
+class DailyHost(models.Model):
+    """Les 5 places Bénites (shiny) et 5 Maudites tirées au sort CHAQUE JOUR."""
+
+    class Kind(models.TextChoices):
+        SHINY = "shiny", "Bénite (Shiny)"
+        CURSED = "cursed", "Maudite"
+
+    pool = models.ForeignKey(Pool, on_delete=models.CASCADE, related_name="daily_hosts")
+    day = models.DateField(db_index=True)
+    hostname = models.CharField(max_length=120)
+    kind = models.CharField(max_length=16, choices=Kind.choices)
+
+    class Meta:
+        verbose_name = "Place du jour"
+        verbose_name_plural = "Places du jour"
+        unique_together = ("pool", "day", "hostname")
+        ordering = ("-day", "kind", "hostname")
+
+    def __str__(self):
+        return f"{self.day} · {self.hostname} ({self.kind})"
 
 
 class WeeklyDesignation(models.Model):

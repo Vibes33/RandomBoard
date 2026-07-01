@@ -1,6 +1,7 @@
 from django.contrib import admin
 from django.urls import path
 from django.views.generic import RedirectView
+from core import api
 from core.views import dashboard, healthz, leaderboard_preview
 
 admin.site.site_header = "Chaos Leaderboard 42 — Back-office"
@@ -8,8 +9,15 @@ admin.site.site_title = "Chaos 42"
 admin.site.index_title = "Administration de la Piscine"
 
 urlpatterns = [
-    path("", RedirectView.as_view(url="/dashboard/", permanent=False)),
+    path("", RedirectView.as_view(url="/panel/", permanent=False)),
     path("dashboard/", dashboard, name="dashboard"),
+    path("panel/", api.panel, name="panel"),
+    path("panel/api/users", api.api_users),
+    path("panel/api/users/<int:user_id>/adjust", api.api_user_adjust),
+    path("panel/api/logs", api.api_logs),
+    path("panel/api/points", api.api_points),
+    path("panel/api/days", api.api_days),
+    path("panel/api/hosts", api.api_hosts),
     path("admin/", admin.site.urls),
     path("healthz", healthz),
     # Aperçu curl-able (logique de score complète = étape 3)
