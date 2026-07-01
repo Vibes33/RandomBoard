@@ -116,6 +116,9 @@
   @keyframes fadeUp{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:none}}
   @keyframes fadeDown{from{opacity:0;transform:translateY(-12px)}to{opacity:1;transform:none}}
   @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+  .losers-head{font-size:12px;color:var(--muted-2);letter-spacing:.4px;margin:16px 0 8px;
+        border-top:1px solid var(--line);padding-top:12px}
+  .lname{display:flex;align-items:center;font-size:13px;font-weight:600;color:var(--muted)}
   @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 </style>
 </head>
@@ -123,9 +126,9 @@
   <div class="top">
     <div class="brand">
       <div class="logo">⚡</div>
-      <div><h1>Chaos Leaderboard 42</h1><p>Back-office · Piscine en cours</p></div>
+      <div><h1>Chaos Leaderboard 42</h1><p>Back-office · période {{ period }}</p></div>
     </div>
-    <div class="zone">Zone · <b>{{ pool.name|default:"—" }}</b></div>
+    <div class="zone">Piscine · <b>{{ pool.name|default:"—" }}</b></div>
     <div class="spacer"></div>
     <div class="clock"><i></i><span id="clock">--:--:--</span></div>
     <a class="pill" href="/admin/">Admin CRUD →</a>
@@ -145,8 +148,10 @@
   <div class="grid">
     <!-- Leaderboard -->
     <div class="card col-7" style="animation-delay:.18s">
-      <div class="chead"><div class="ic green">🏆</div><h3>CLASSEMENT — SCORE (CUMUL FIGÉ + JOUR)</h3></div>
+      <div class="chead"><div class="ic green">🏆</div><h3>CLASSEMENT — TOP 8</h3></div>
       <div class="lb" id="lb"></div>
+      <div class="losers-head">🪦 Lanterne rouge</div>
+      <div class="lb" id="losers"></div>
     </div>
 
     <!-- Gauge -->
@@ -166,7 +171,7 @@
 
     <!-- Events per day (area) -->
     <div class="card col-8" style="animation-delay:.30s">
-      <div class="chead"><div class="ic green">📈</div><h3>EVENTS PAR JOUR — 14 DERNIERS JOURS</h3></div>
+      <div class="chead"><div class="ic green">📈</div><h3>ACTIVITÉ PAR JOUR — {{ period }}</h3></div>
       <svg id="area" width="100%" height="190" preserveAspectRatio="none"></svg>
     </div>
 
@@ -183,15 +188,14 @@
       <svg id="bars" width="100%" height="170"></svg>
     </div>
 
-    <!-- Curls per day (line) -->
+    <!-- Points per day (line) -->
     <div class="card col-5" style="animation-delay:.48s">
-      <div class="chead"><div class="ic orange">⌁</div><h3>APPELS curl /leaderboard</h3></div>
+      <div class="chead"><div class="ic orange">⌁</div><h3>POINTS BRUTS PAR JOUR</h3></div>
       <svg id="curls" width="100%" height="170" preserveAspectRatio="none"></svg>
     </div>
   </div>
 
-  <div class="foot">{{ events_total }} events au total · {{ raw_total }} points bruts cumulés ·
-    coefficients & snapshots à l'étape 3 — ces scores sont un aperçu hors multiplicateur.</div>
+  <div class="foot">{{ events_total }} events · {{ raw_total }} points bruts cumulés · période {{ period }}</div>
 
   {{ bundle_json|json_script:"data" }}
 <script>
@@ -321,7 +325,19 @@ function donut(svgId,legendId,data){
       <div class="pts">${Math.round(l.pts)}</div>`;
     box.append(row);
     const f=row.querySelector('.fill');
-    setTimeout(()=>f.style.width=Math.max(12,Math.round(100*l.pts/max))+'%',200+i*90);
+    setTimeout(()=>f.style.width=Math.max(12,Math.round(100*Math.max(0,l.pts)/max))+'%',200+i*90);
+  });
+})();
+
+/* lanterne rouge (derniers du classement) */
+(function(){
+  const box=document.getElementById('losers');
+  if(!D.losers||!D.losers.length){box.previousElementSibling.remove();box.remove();return;}
+  D.losers.forEach(l=>{
+    const row=document.createElement('div');row.className='row';
+    row.innerHTML=`<div class="rk">🪦</div><div class="lname">${l.login}</div>`+
+      `<div class="pts" style="color:var(--red)">${Math.round(l.pts)}</div>`;
+    box.append(row);
   });
 })();
 
@@ -337,7 +353,7 @@ function donut(svgId,legendId,data){
 })();
 
 area('area',D.events_per_day,'#8fe03a');
-area('curls',D.curls_per_day,'#ff9b3d');
+area('curls',D.points_per_day,'#ff9b3d');
 bars('bars',D.by_type.length?D.by_type:[{label:'—',value:0}],'#8fe03a');
 donut('cats','catsLegend',D.categories);
 

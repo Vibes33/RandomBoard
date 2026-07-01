@@ -40,7 +40,11 @@ def _num(context, params, default=0.0):
 # Évaluateurs — chacun renvoie (points: Decimal, roll: dict|None)
 # ─────────────────────────────────────────────────────────────
 def ev_fixed(params, ctx, rng):
-    return _d(params["points"]), None
+    """Points fixes, ou tirés dans [min,max] si la range est fournie (random figé)."""
+    if params.get("min") is not None and params.get("max") is not None:
+        v = rng.uniform(float(params["min"]), float(params["max"]))
+        return _d(v), {"rolled": round(v, 2)}
+    return _d(params.get("points", 0)), None
 
 
 def ev_linear_decay(params, ctx, rng):

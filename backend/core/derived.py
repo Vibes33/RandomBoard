@@ -131,33 +131,44 @@ def apply_seniority(pool, day=None):
 # ─────────────────────────────────────────────────────────────
 # Coefficient week-end (pénalisant, config dans la règle config_weekend)
 # ─────────────────────────────────────────────────────────────
-def randomize_daily_coefficient(pool, day=None, seed=None):
-    """
-    Donne au jour un multiplicateur ALÉATOIRE dans la plage configurée
-    (règle config_daily : coef_min/coef_max). Ne touche pas un jour déjà verrouillé
-    ni un week-end (géré par ensure_weekend_coefficients). C'est ce random journalier
-    qui fait qu'un même projet rendu un autre jour vaut plus ou moins de points.
-    """
-    day = day or timezone.localdate()
-    if day.weekday() >= 5:
-        return None  # le week-end a son propre facteur
+_DEFAULT_RANGES = {"gain": (1.0, 1.5), "loss": (1.0, 2.0), "event": (0.8, 1.4)}
+
+
+def _daily_ranges():
+    """Ranges [min,max] par catégorie, depuis la règle config_daily (éditable en admin)."""
     cfg = Rule.objects.filter(key="config_daily").first()
     params = (cfg.current_version.params if cfg and cfg.current_version else {})
-    lo = float(params.get("coef_min", 0.8))
-    hi = float(params.get("coef_max", 1.6))
-    rng = random.Random(seed if seed is not None else f"{pool.slug}:{day.isoformat()}")
-    value = Decimal(str(round(rng.uniform(lo, hi), 2)))
+    out = {}
+    for cat, default in _DEFAULT_RANGES.items():
+        r = params.get(cat) or {}
+        out[cat] = (float(r.get("min", default[0])), float(r.get("max", default[1])))
+    return out
 
-    obj, created = DailyCoefficient.objects.get_or_create(
-        pool=pool, day=day, defaults={"coefficient": value, "is_weekend": False}
-    )
-    if not created and not obj.locked:
-        obj.coefficient = value
-        obj.save(update_fields=["coefficient"])
-    return value
+
+def randomize_daily_coefficient(pool, day=None, reseed=False):
+    """
+    Tire un multiplicateur aléatoire PAR CATÉGORIE dans les ranges configurées.
+    - reseed=False : déterministe par (pool, jour, catégorie) → idempotent (tâche de nuit).
+    - reseed=True  : nouveau tirage à chaque appel (action admin « re-randomiser »).
+    Respecte les jours verrouillés (non modifiés).
+    """
+    day = day or timezone.localdate()
+    obj, _ = DailyCoefficient.objects.get_or_create(pool=pool, day=day)
+    if obj.locked:
+        return None
+    ranges = _daily_ranges()
+    vals = {}
+    for cat, (lo, hi) in ranges.items():
+        rng = random.Random(None if reseed else f"{pool.slug}:{day.isoformat()}:{cat}")
+        vals[cat] = Decimal(str(round(rng.uniform(lo, hi), 2)))
+    obj.coef_gain, obj.coef_loss, obj.coef_event = vals["gain"], vals["loss"], vals["event"]
+    obj.is_weekend = day.weekday() >= 5
+    obj.save(update_fields=["coef_gain", "coef_loss", "coef_event", "is_weekend"])
+    return vals
 
 
 def ensure_weekend_coefficients(pool, upto=None):
+    """Le week-end pénalise les GAINS (coef_gain = facteur), pertes/events inchangés."""
     upto = upto or timezone.localdate()
     cfg = Rule.objects.filter(key="config_weekend").first()
     factor = Decimal(str(
@@ -168,12 +179,13 @@ def ensure_weekend_coefficients(pool, upto=None):
     while day <= upto:
         if day.weekday() >= 5:
             obj, created = DailyCoefficient.objects.get_or_create(
-                pool=pool, day=day, defaults={"coefficient": factor, "is_weekend": True}
+                pool=pool, day=day,
+                defaults={"coef_gain": factor, "is_weekend": True},
             )
-            if not created and not obj.locked and (obj.coefficient != factor or not obj.is_weekend):
-                obj.coefficient = factor
+            if not created and not obj.locked and (obj.coef_gain != factor or not obj.is_weekend):
+                obj.coef_gain = factor
                 obj.is_weekend = True
-                obj.save(update_fields=["coefficient", "is_weekend"])
+                obj.save(update_fields=["coef_gain", "is_weekend"])
                 updated += 1
         day += timedelta(days=1)
     return factor, updated

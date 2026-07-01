@@ -23,9 +23,9 @@ DEMO_RULES = [
      {"type": "linear_decay", "value_key": "minutes", "min": 1, "max": 300,
       "max_points": 200, "min_points": 0}),
     ("kw_quoi_feur", "gain", 'Feedback contient "quoi feur"',
-     {"type": "fixed", "points": 50}),
+     {"type": "fixed", "min": 40, "max": 60}),
     ("curl_leaderboard", "gain", "curl sur le leaderboard",
-     {"type": "fixed", "points": 5}),
+     {"type": "fixed", "min": 3, "max": 8}),
     ("bsq_eval", "gain", "Évaluation projet BSQ",
      {"type": "random_modifier", "base": 100, "rand_min": -30, "rand_max": 30}),
     ("bsq_duration", "loss", "BSQ : durée d'éval hors [30–60 min]",
@@ -39,14 +39,14 @@ DEMO_RULES = [
     ("randominette", "event", "Randominette (pile ou face)",
      {"type": "probability", "proba": 0.5, "points": 150, "else_points": -50}),
     ("kw_quoi_sans_feur", "loss", 'Feedback "quoi" sans "feur" / "coubeh"',
-     {"type": "fixed", "points": -40, "rank_penalty": 1}),
+     {"type": "fixed", "min": -50, "max": -30, "rank_penalty": 1}),
     ("reconnect_same_pc", "loss", "Reco sur le MÊME pc dans la journée",
-     {"type": "fixed", "points": -25}),
+     {"type": "fixed", "min": -35, "max": -15}),
     ("logtime_high", "loss", "Logtime haut (12h–24h)",
      {"type": "linear_growth", "value_key": "minutes", "min": 720, "max": 1440,
       "max_malus": -300}),
     ("aura_first_coalition", "loss", "1er de sa coalition (perte d'aura)",
-     {"type": "fixed", "points": -1000}),
+     {"type": "fixed", "min": -1200, "max": -800}),
     ("last_day_corrections", "event", "Dernier jour : corrections × 1000",
      {"type": "multiplier", "value_key": "correction_points", "factor": 1000}),
     # ─── règles avancées (contextuelles) ───
@@ -68,15 +68,18 @@ DEMO_RULES = [
       "map": {"quoi feur": 50, "apple": 80, "frieren": 80, "dedavid": 100, "rydelepi": 100},
       "quoi_alone_points": -40, "coubeh_points": -40,
       "rank_penalty_on": ["quoi_alone", "coubeh"]}),
-    # ─── random journalier (chaque jour vaut +/- ) ───
-    ("config_daily", "event", "[config] random du coefficient journalier",
-     {"type": "fixed", "points": 0, "coef_min": 0.8, "coef_max": 1.6}),
+    # ─── ranges du multiplicateur journalier, PAR CATÉGORIE ───
+    ("config_daily", "event", "[config] ranges du multiplicateur journalier",
+     {"type": "fixed", "points": 0,
+      "gain": {"min": 1.0, "max": 1.5},
+      "loss": {"min": 1.0, "max": 2.0},
+      "event": {"min": 0.8, "max": 1.4}}),
     # ─── ajustement manuel par le staff (points fournis à la création) ───
     ("manual_adjust", "event", "Ajustement manuel (staff)",
      {"type": "from_context", "value_key": "points"}),
     # ─── projets & corrections (issus de scale_teams) ───
     ("shell_malus", "loss", "Rendre Shell 00 / Shell 01",
-     {"type": "fixed", "points": -60}),
+     {"type": "fixed", "min": -80, "max": -40}),
     ("rush_malus", "loss", "Rush (malus, énorme si note 0)",
      {"type": "threshold_window", "value_key": "mark", "lo": 1, "hi": 125,
       "in_points": -50, "out_points": -300}),
@@ -128,12 +131,12 @@ class Command(BaseCommand):
             cur = rule.current_version
             if cur is None:
                 RuleVersion.objects.create(rule=rule, version=1, params=params, valid_from=now)
-            elif "type" not in (cur.params or {}):
-                # migration vers le format moteur via versioning (le passé reste figé)
+            elif cur.params != params:
+                # la config a changé → nouvelle version (le passé figé reste intact)
                 new_rule_version(rule, params)
                 migrated += 1
         self.stdout.write(f"Règles: {Rule.objects.count()} "
-                          f"({migrated} migrée(s) vers le format moteur)")
+                          f"({migrated} mise(s) à jour)")
 
         users = []
         for login in DEMO_USERS:

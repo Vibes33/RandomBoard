@@ -56,8 +56,13 @@ def poll_42():
     client = FtClient()
     if not client.configured:
         return {"skipped": "aucune clé API configurée"}
+    today = timezone.localdate()
     out = {}
     for pool in Pool.objects.filter(is_active=True):
+        # on ne poll QUE la piscine en cours (évite de polluer un pool de test/historique)
+        if not (pool.starts_on <= today <= pool.ends_on):
+            out[pool.slug] = "hors période — ignoré"
+            continue
         data = fetch_live(client, campus_id=settings.FT_CAMPUS_ID, cursus_id=settings.FT_CURSUS_ID)
         out[pool.slug] = sync_all(pool, data)
     return out

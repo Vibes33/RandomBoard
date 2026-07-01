@@ -119,21 +119,31 @@ class RuleVersion(models.Model):
 
 
 class DailyCoefficient(models.Model):
-    """Le multiplicateur journalier appliqué à la somme des points du jour."""
+    """
+    Multiplicateurs journaliers PAR CATÉGORIE.
+    Score du jour = Σgains×coef_gain + Σpertes×coef_loss + Σevents×coef_event.
+    """
     pool = models.ForeignKey(Pool, on_delete=models.CASCADE, related_name="coefficients")
     day = models.DateField()
-    coefficient = models.DecimalField(max_digits=8, decimal_places=4, default=1)
+    coef_gain = models.DecimalField(max_digits=8, decimal_places=4, default=1,
+                                    help_text="Multiplicateur des GAINS ce jour.")
+    coef_loss = models.DecimalField(max_digits=8, decimal_places=4, default=1,
+                                    help_text="Multiplicateur des PERTES ce jour.")
+    coef_event = models.DecimalField(max_digits=8, decimal_places=4, default=1,
+                                     help_text="Multiplicateur des ÉVÉNEMENTS ce jour.")
+    coefficient = models.DecimalField(max_digits=8, decimal_places=4, default=1,
+                                      help_text="(hérité — non utilisé par le calcul par catégorie)")
     is_weekend = models.BooleanField(default=False, help_text="Déclenche le coef pénalisant week-end.")
     locked = models.BooleanField(default=False, help_text="True une fois le jour figé (snapshot fait).")
 
     class Meta:
-        verbose_name = "Coefficient journalier"
-        verbose_name_plural = "Coefficients journaliers"
+        verbose_name = "Jour de piscine"
+        verbose_name_plural = "Jours de piscine"
         unique_together = ("pool", "day")
         ordering = ("-day",)
 
     def __str__(self):
-        return f"{self.day} × {self.coefficient}"
+        return f"{self.day} (g×{self.coef_gain} p×{self.coef_loss} e×{self.coef_event})"
 
 
 # ────────────────────────────────────────────────────────────────────
