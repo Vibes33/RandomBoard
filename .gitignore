@@ -1,0 +1,20 @@
+# Secrets — JAMAIS committer
+.env
+*.pem
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Django
+*.sqlite3
+/backend/staticfiles/
+/backend/media/
+
+# OS / IDE
+.DS_Store
+.idea/
+.vscode/
