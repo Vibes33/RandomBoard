@@ -123,8 +123,8 @@
     <div><h1>Chaos 42 — Panel Admin</h1><p>{{ pool.name|default:"Aucune piscine active" }} · {{ pool_period }}</p></div>
     <div class="grow"></div>
     <a class="lnk" href="/dashboard/">📊 Dashboard</a>
-    <a class="lnk" href="/admin/django_celery_beat/periodictask/">⏰ Crontabs</a>
-    <a class="lnk" href="/admin/">⚙︎ Admin Django</a>
+    <form method="post" action="/panel/logout/" style="margin:0">{% csrf_token %}
+      <button class="lnk" type="submit" style="background:var(--panel)">⎋ Déconnexion</button></form>
   </header>
 
   <div class="tabs">

@@ -110,4 +110,4 @@ class Command(BaseCommand):
                     raw_points=pts, random_roll=roll,
                 )
         self.stdout.write(f"Events: {EventLog.objects.filter(pool=pool).count()}")
-        self.stdout.write(self.style.SUCCESS("Seed terminé. Va voir /admin/ 🎉"))
+        self.stdout.write(self.style.SUCCESS("Seed terminé. Va voir /panel/ 🎉"))

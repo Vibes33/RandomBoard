@@ -7,4 +7,3 @@ redis==5.2.1
 django-celery-beat==2.7.0
 gunicorn==23.0.0
 requests==2.32.3
-django-unfold>=0.40,<1.0

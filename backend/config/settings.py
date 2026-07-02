@@ -12,11 +12,7 @@ DEBUG = env("DJANGO_DEBUG")
 ALLOWED_HOSTS = env.list("DJANGO_ALLOWED_HOSTS", default=["*"])
 
 INSTALLED_APPS = [
-    # Unfold : admin moderne (doit précéder django.contrib.admin)
-    "unfold",
-    "unfold.contrib.filters",
-    "unfold.contrib.forms",
-    "django.contrib.admin",
+    # Pas d'admin Django : tout se gère depuis /panel/ (auth Django conservée).
     "django.contrib.auth",
     "django.contrib.contenttypes",
     "django.contrib.sessions",
@@ -84,18 +80,10 @@ STATIC_ROOT = BASE_DIR / "staticfiles"
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
-# ─── Unfold (admin) ───
-UNFOLD = {
-    "SITE_TITLE": "Chaos 42",
-    "SITE_HEADER": "Chaos Leaderboard 42",
-    "SITE_SUBHEADER": "Back-office de la Piscine",
-    "SITE_URL": "/dashboard/",
-    "COLORS": {
-        "primary": {
-            "500": "143 224 58", "600": "126 200 45", "700": "100 160 35",
-        },
-    },
-}
+# ─── Auth du panel (login dédié, plus d'admin Django) ───
+LOGIN_URL = "/panel/login/"
+LOGIN_REDIRECT_URL = "/panel/"
+LOGOUT_REDIRECT_URL = "/panel/login/"
 
 # ─── Celery + planning du snapshot de minuit (design §3) ───
 from celery.schedules import crontab  # noqa: E402

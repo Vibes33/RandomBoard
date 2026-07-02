@@ -131,7 +131,7 @@
     <div class="zone">Piscine · <b>{{ pool.name|default:"—" }}</b></div>
     <div class="spacer"></div>
     <div class="clock"><i></i><span id="clock">--:--:--</span></div>
-    <a class="pill" href="/admin/">Admin CRUD →</a>
+    <a class="pill" href="/panel/">Panel Admin →</a>
   </div>
 
   <!-- KPI -->
@@ -316,7 +316,7 @@ function donut(svgId,legendId,data){
 /* render leaderboard */
 (function(){
   const box=document.getElementById('lb');
-  if(!D.leaders.length){box.innerHTML='<div class="empty">Aucun event — lance <code>seed_demo</code> ou ajoute des events dans l\'admin.</div>';return;}
+  if(!D.leaders.length){box.innerHTML='<div class="empty">Aucun event — lance une synchronisation depuis le <code>Panel</code>.</div>';return;}
   const max=Math.max(1,...D.leaders.map(l=>l.pts));
   D.leaders.forEach((l,i)=>{
     const row=document.createElement('div');row.className='row';

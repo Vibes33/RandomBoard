@@ -11,7 +11,6 @@ import json
 from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation
 
-from django.contrib.admin.views.decorators import staff_member_required
 from django.db import transaction
 from django.db.models import Count, Q
 from django.http import HttpResponseBadRequest, JsonResponse
@@ -19,6 +18,7 @@ from django.shortcuts import render
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.views.decorators.http import require_http_methods
 
+from .auth import staff_required
 from .derived import randomize_daily_hosts
 from .engine import new_rule_version
 from .models import (
@@ -62,7 +62,7 @@ def _rule_cards(pool=None):
 
 
 # ─────────────────────────── page ───────────────────────────
-@staff_member_required
+@staff_required
 @ensure_csrf_cookie
 def panel(request):
     pool = _pool()
@@ -73,7 +73,7 @@ def panel(request):
 
 
 # ─────────────────────────── 0. Piscines ───────────────────────────
-@staff_member_required
+@staff_required
 def api_pools(request):
     """Liste des piscines (avec filtres) + années disponibles pour le filtre."""
     qs = Pool.objects.all().order_by("-starts_on")
@@ -99,7 +99,7 @@ def api_pools(request):
     return JsonResponse({"pools": pools, "years": years})
 
 
-@staff_member_required
+@staff_required
 @require_http_methods(["POST"])
 def api_pool_activate(request, pool_id):
     """Définit UNE piscine active (désactive toutes les autres, atomique)."""
@@ -113,7 +113,7 @@ def api_pool_activate(request, pool_id):
 
 
 # ─────────────────────────── 1. Users ───────────────────────────
-@staff_member_required
+@staff_required
 def api_users(request):
     pool = _pool()
     if not pool:
@@ -130,7 +130,7 @@ def api_users(request):
     return JsonResponse({"users": users})
 
 
-@staff_member_required
+@staff_required
 @require_http_methods(["POST"])
 def api_user_adjust(request, user_id):
     pool = _pool()
@@ -149,7 +149,7 @@ def api_user_adjust(request, user_id):
 
 
 # ─────────────────────────── 2. Logs ───────────────────────────
-@staff_member_required
+@staff_required
 def api_logs(request):
     pool = _pool()
     if not pool:
@@ -174,7 +174,7 @@ def api_logs(request):
 
 
 # ─────────────────────── 3. Options de Points ───────────────────────
-@staff_member_required
+@staff_required
 @require_http_methods(["GET", "POST"])
 def api_points(request):
     if request.method == "GET":
@@ -201,7 +201,7 @@ def api_points(request):
 
 
 # ─────────────────────── 4. Gestion par Jour ───────────────────────
-@staff_member_required
+@staff_required
 @require_http_methods(["GET", "POST"])
 def api_days(request):
     pool = _pool()
@@ -249,7 +249,7 @@ def api_days(request):
 
 
 # ─────────────────────── 5. Places & Hosts (5 Bénites + 5 Maudites / jour) ───────────────────────
-@staff_member_required
+@staff_required
 @require_http_methods(["GET", "POST"])
 def api_hosts(request):
     pool = _pool()
@@ -298,7 +298,7 @@ def _run_payload(run):
     }
 
 
-@staff_member_required
+@staff_required
 @require_http_methods(["GET", "POST"])
 def api_sync(request):
     """GET : dernier run + historique. POST : lance un nouveau run (si aucun en cours)."""
@@ -341,7 +341,7 @@ def api_sync(request):
     return JsonResponse({"ok": True, "id": run.id})
 
 
-@staff_member_required
+@staff_required
 def api_sync_status(request):
     """Statut d'un run précis (?id=) ou du dernier — pour le polling live."""
     run_id = request.GET.get("id")
@@ -350,7 +350,7 @@ def api_sync_status(request):
     return JsonResponse({"run": _run_payload(run)})
 
 
-@staff_member_required
+@staff_required
 @require_http_methods(["GET", "POST"])
 def api_autosync(request):
     """

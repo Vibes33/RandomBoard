@@ -10,12 +10,12 @@ Vues HTTP du Chaos Leaderboard 42.
 import json
 from datetime import timedelta
 
-from django.contrib.admin.views.decorators import staff_member_required
 from django.db.models import Count, Max, Min, Sum
 from django.http import HttpResponse, JsonResponse
 from django.shortcuts import render
 from django.utils import timezone
 
+from .auth import staff_required
 from .models import AppUser, CurlTracking, EventLog, Pool, Rule
 from .services import standings
 
@@ -123,7 +123,7 @@ def leaderboard_preview(request):
     return HttpResponse(body, content_type="text/plain; charset=utf-8")
 
 
-@staff_member_required
+@staff_required
 def dashboard(request):
     """Back-office visuel : KPI + graphes, alimentés par la base en temps réel."""
     today = timezone.localdate()

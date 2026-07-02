@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chaos 42 · Connexion</title>
+<style>
+  :root{
+    --bg:#070b0a; --panel:rgba(24,32,28,.62); --line:rgba(255,255,255,.08);
+    --line-hi:rgba(143,224,58,.22); --txt:#eaf2ec; --muted:rgba(234,242,236,.56);
+    --green:#8fe03a; --green-b:#c8ff4d; --red:#ff5f5f; --ease:cubic-bezier(.22,1,.36,1);
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,"SF Pro Display",system-ui,sans-serif;color:var(--txt);
+    background:var(--bg);min-height:100vh;display:grid;place-items:center;padding:24px;
+    background-image:radial-gradient(1200px 640px at 82% -12%,rgba(143,224,58,.10),transparent 60%),
+      radial-gradient(900px 520px at 8% 118%,rgba(74,163,255,.06),transparent 55%),
+      radial-gradient(circle at center,rgba(255,255,255,.02) 1px,transparent 1.4px);
+    background-size:auto,auto,22px 22px;-webkit-font-smoothing:antialiased}
+  .card{width:100%;max-width:360px;background:var(--panel);border:1px solid var(--line);
+    border-radius:18px;backdrop-filter:blur(16px);padding:30px 28px;box-shadow:0 20px 60px rgba(0,0,0,.45)}
+  .logo{width:44px;height:44px;border-radius:12px;display:grid;place-items:center;font-size:21px;
+    margin-bottom:16px;background:linear-gradient(140deg,var(--green),#4fae1f);color:#0b1206;
+    box-shadow:0 6px 22px rgba(143,224,58,.34)}
+  h1{font-size:18px;font-weight:600}
+  p.sub{font-size:13px;color:var(--muted);margin:4px 0 22px}
+  label{display:block;font-size:12px;color:var(--muted);margin:14px 0 6px}
+  input{width:100%;background:rgba(0,0,0,.28);border:1px solid var(--line);border-radius:10px;
+    color:var(--txt);padding:11px 13px;font-size:14px;font-family:inherit;outline:none;transition:border-color .2s}
+  input:focus{border-color:var(--green)}
+  button{width:100%;margin-top:22px;cursor:pointer;font-family:inherit;border-radius:10px;padding:12px;
+    font-size:14px;font-weight:600;color:#0b1206;border:1px solid var(--line-hi);
+    background:linear-gradient(180deg,var(--green-b),var(--green));transition:transform .18s,box-shadow .18s}
+  button:hover{transform:translateY(-1px);box-shadow:0 8px 22px rgba(143,224,58,.22)}
+  .err{margin-top:14px;padding:10px 12px;border-radius:10px;font-size:13px;
+    background:rgba(255,95,95,.12);border:1px solid rgba(255,95,95,.3);color:#ffd4d4}
+</style>
+</head>
+<body>
+  <form class="card" method="post" action="">
+    {% csrf_token %}
+    <div class="logo">⚡</div>
+    <h1>Chaos 42 — Panel Admin</h1>
+    <p class="sub">Connecte-toi avec ton compte staff.</p>
+
+    {% if form.errors %}
+      <div class="err">Identifiants invalides ou compte non autorisé.</div>
+    {% endif %}
+
+    <label for="id_username">Identifiant</label>
+    <input id="id_username" type="text" name="username" autofocus autocomplete="username" required>
+
+    <label for="id_password">Mot de passe</label>
+    <input id="id_password" type="password" name="password" autocomplete="current-password" required>
+
+    <input type="hidden" name="next" value="{{ next }}">
+    <button type="submit">Se connecter</button>
+  </form>
+</body>
+</html>
