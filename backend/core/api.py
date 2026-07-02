@@ -348,3 +348,39 @@ def api_sync_status(request):
     run = (SyncRun.objects.filter(id=run_id).first() if run_id
            else SyncRun.objects.first())
     return JsonResponse({"run": _run_payload(run)})
+
+
+@staff_member_required
+@require_http_methods(["GET", "POST"])
+def api_autosync(request):
+    """
+    Interrupteur du polling automatique (tâche Beat `poll-42`, toutes les 10 min).
+    GET : état + prochain run estimé. POST {enabled} : active/désactive.
+    poll_42 ne cible QUE la piscine active, et seulement pendant sa période.
+    """
+    from django.utils import timezone as tz
+    from django_celery_beat.models import PeriodicTask
+
+    pt = PeriodicTask.objects.filter(name="poll-42").first()
+    if request.method == "POST":
+        if not pt:
+            return HttpResponseBadRequest("Tâche planifiée introuvable (Beat non initialisé).")
+        pt.enabled = bool(_json(request).get("enabled"))
+        pt.save(update_fields=["enabled"])  # Beat recharge via signal PeriodicTasks.changed
+        return JsonResponse({"ok": True, "enabled": pt.enabled})
+
+    if not pt:
+        return JsonResponse({"exists": False})
+    next_in = None
+    try:
+        next_in = max(0, int(pt.schedule.remaining_estimate(tz.localtime()).total_seconds()))
+    except Exception:  # noqa: BLE001
+        next_in = None
+    pool = _pool()
+    return JsonResponse({
+        "exists": True, "enabled": pt.enabled,
+        "interval_label": "toutes les 10 min",
+        "last_run": tz.localtime(pt.last_run_at).strftime("%d/%m %H:%M:%S") if pt.last_run_at else None,
+        "next_in": next_in, "total_runs": pt.total_run_count,
+        "pool": pool.name if pool else None,
+    })

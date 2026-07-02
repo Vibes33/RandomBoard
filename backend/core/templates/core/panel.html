@@ -102,6 +102,14 @@
   .badge.error{background:rgba(255,95,95,.15);color:var(--red)}
   .badge.pending{background:rgba(233,197,59,.15);color:var(--gold)}
 
+  .switch{position:relative;display:inline-block;width:46px;height:26px;flex:none}
+  .switch input{opacity:0;width:0;height:0}
+  .switch .sl{position:absolute;inset:0;background:rgba(255,255,255,.14);border-radius:26px;transition:.25s;cursor:pointer}
+  .switch .sl:before{content:"";position:absolute;height:20px;width:20px;left:3px;top:3px;background:#fff;border-radius:50%;transition:.25s var(--ease)}
+  .switch input:checked+.sl{background:linear-gradient(180deg,var(--green-b),var(--green))}
+  .switch input:checked+.sl:before{transform:translateX(20px)}
+  .switch input:disabled+.sl{opacity:.4;cursor:not-allowed}
+
   #toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%) translateY(30px);opacity:0;
     background:var(--panel-2);border:1px solid var(--line-hi);color:var(--txt);padding:11px 20px;border-radius:12px;
     font-size:13px;backdrop-filter:blur(14px);transition:.3s var(--ease);z-index:50;box-shadow:0 10px 30px rgba(0,0,0,.4)}
@@ -200,6 +208,19 @@
 
   <section class="pane" id="p-sync">
     <div class="sec">Lancer l'ingestion des données depuis l'API 42 — puis automatique toutes les 10 min</div>
+    <div class="card" style="padding:18px;margin-bottom:16px">
+      <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+        <label class="switch"><input type="checkbox" id="auto-toggle"><span class="sl"></span></label>
+        <div style="flex:1;min-width:220px">
+          <div style="font-weight:600">Synchronisation automatique</div>
+          <div class="calc" id="auto-info">Chargement…</div>
+        </div>
+        <div style="text-align:right">
+          <div class="stat" style="margin:0;justify-content:flex-end"><span>Prochain run <b id="auto-next">—</b></span></div>
+          <div class="calc" id="auto-last"></div>
+        </div>
+      </div>
+    </div>
     <div class="cols">
       <div class="card" style="padding:18px">
         <div class="sec">Nouvelle synchronisation</div>
@@ -400,7 +421,22 @@ async function loadHosts(){
 let syncPoll=null;
 async function initSync(){
   $('#sync-start').onclick=startSync;
-  await refreshSync();
+  await Promise.all([refreshSync(),loadAuto()]);
+}
+const fmtDur=s=>s<60?s+'s':Math.floor(s/60)+' min '+(s%60)+'s';
+async function loadAuto(){
+  const d=await api('/panel/api/autosync');
+  const t=$('#auto-toggle');
+  if(!d.exists){$('#auto-info').textContent='Beat pas encore initialisé — réessaie dans un instant.';t.disabled=true;return;}
+  t.disabled=false; t.checked=d.enabled;
+  t.onchange=async()=>{
+    const r=await api('/panel/api/autosync','POST',{enabled:t.checked});
+    toast(r.enabled?'Auto-synchronisation activée':'Auto-synchronisation désactivée'); loadAuto();
+  };
+  $('#auto-info').innerHTML=`Interroge l'API 42 <b>${d.interval_label}</b> · piscine active <b>${d.pool||'—'}</b>.`
+    +` <span style="color:var(--faint)">(ne poll que pendant la période de la piscine)</span>`;
+  $('#auto-next').textContent=d.enabled?(d.next_in!=null?'~ '+fmtDur(d.next_in):'—'):'désactivée';
+  $('#auto-last').textContent=(d.last_run?('dernier : '+d.last_run):'jamais exécutée')+` · ${d.total_runs} run(s)`;
 }
 async function startSync(){
   const body={};

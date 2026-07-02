@@ -22,6 +22,7 @@ urlpatterns = [
     path("panel/api/hosts", api.api_hosts),
     path("panel/api/sync", api.api_sync),
     path("panel/api/sync/status", api.api_sync_status),
+    path("panel/api/autosync", api.api_autosync),
     path("admin/", admin.site.urls),
     path("healthz", healthz),
     # Aperçu curl-able (logique de score complète = étape 3)
