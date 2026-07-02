@@ -22,7 +22,8 @@ from django.views.decorators.http import require_http_methods
 from .derived import randomize_daily_hosts
 from .engine import new_rule_version
 from .models import (
-    AppUser, DailyEventMultiplier, DailyHost, EventLog, Pool, Rule, Workstation,
+    AppUser, DailyEventMultiplier, DailyHost, EventLog, Pool, Rule, SyncRun,
+    Workstation,
 )
 from .services import (
     adjust_user_score, day_multipliers, randomize_day_multipliers,
@@ -277,3 +278,73 @@ def api_hosts(request):
         out["shiny"] = sorted(h.hostname for h in dh if h.kind == "shiny")
         out["cursed"] = sorted(h.hostname for h in dh if h.kind == "cursed")
     return JsonResponse(out)
+
+
+# ─────────────────────── 6. Synchronisation API ───────────────────────
+def _run_payload(run):
+    """Sérialise un SyncRun pour le suivi live du panel."""
+    if not run:
+        return None
+    return {
+        "id": run.id, "status": run.status, "progress": run.progress,
+        "pool": run.pool.name if run.pool else None,
+        "date_from": str(run.date_from) if run.date_from else None,
+        "date_to": str(run.date_to) if run.date_to else None,
+        "days_done": run.days_done, "days_total": run.days_total,
+        "current_day": str(run.current_day) if run.current_day else None,
+        "events": run.events_ingested, "log": run.log, "error": run.error,
+        "started_at": run.started_at.strftime("%d/%m %H:%M:%S") if run.started_at else None,
+        "finished_at": run.finished_at.strftime("%d/%m %H:%M:%S") if run.finished_at else None,
+    }
+
+
+@staff_member_required
+@require_http_methods(["GET", "POST"])
+def api_sync(request):
+    """GET : dernier run + historique. POST : lance un nouveau run (si aucun en cours)."""
+    if request.method == "GET":
+        runs = SyncRun.objects.all()[:8]
+        return JsonResponse({
+            "current": _run_payload(runs[0] if runs else None),
+            "history": [{
+                "id": r.id, "status": r.status, "pool": r.pool.name if r.pool else None,
+                "events": r.events_ingested, "progress": r.progress,
+                "at": r.created_at.strftime("%d/%m %H:%M"),
+            } for r in runs],
+            "running": SyncRun.objects.filter(
+                status__in=[SyncRun.Status.PENDING, SyncRun.Status.RUNNING]).exists(),
+        })
+
+    # POST : refuse un lancement concurrent
+    if SyncRun.objects.filter(status__in=[SyncRun.Status.PENDING,
+                                          SyncRun.Status.RUNNING]).exists():
+        return HttpResponseBadRequest("Une synchronisation est déjà en cours.")
+
+    data = _json(request)
+    d_from = d_to = None
+    try:
+        if data.get("date_from"):
+            d_from = date.fromisoformat(data["date_from"])
+        if data.get("date_to"):
+            d_to = date.fromisoformat(data["date_to"])
+    except ValueError:
+        return HttpResponseBadRequest("Date invalide (AAAA-MM-JJ).")
+    if d_from and d_to and d_to < d_from:
+        return HttpResponseBadRequest("La date de fin est avant la date de début.")
+
+    run = SyncRun.objects.create(
+        pool=_pool(), date_from=d_from, date_to=d_to,
+        created_by=request.user if request.user.is_authenticated else None,
+    )
+    from .tasks import run_sync
+    run_sync.delay(run.id)
+    return JsonResponse({"ok": True, "id": run.id})
+
+
+@staff_member_required
+def api_sync_status(request):
+    """Statut d'un run précis (?id=) ou du dernier — pour le polling live."""
+    run_id = request.GET.get("id")
+    run = (SyncRun.objects.filter(id=run_id).first() if run_id
+           else SyncRun.objects.first())
+    return JsonResponse({"run": _run_payload(run)})

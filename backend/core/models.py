@@ -376,3 +376,54 @@ class AdminAuditLog(models.Model):
 
     def __str__(self):
         return f"{self.at:%Y-%m-%d %H:%M} · {self.action}"
+
+
+class SyncRun(models.Model):
+    """Exécution d'une synchronisation API 42 (rejeu/ingestion), suivie en direct."""
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "En attente"
+        RUNNING = "running", "En cours"
+        DONE = "done", "Terminé"
+        ERROR = "error", "Erreur"
+
+    pool = models.ForeignKey(Pool, on_delete=models.CASCADE, related_name="sync_runs",
+                             null=True, blank=True)
+    status = models.CharField(max_length=12, choices=Status.choices, default=Status.PENDING)
+    date_from = models.DateField(null=True, blank=True)
+    date_to = models.DateField(null=True, blank=True)
+    days_total = models.PositiveIntegerField(default=0)
+    days_done = models.PositiveIntegerField(default=0)
+    current_day = models.DateField(null=True, blank=True)
+    events_ingested = models.PositiveIntegerField(default=0)
+    log = models.TextField(blank=True)
+    error = models.TextField(blank=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    started_at = models.DateTimeField(null=True, blank=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        verbose_name = "Synchronisation API"
+        verbose_name_plural = "Synchronisations API"
+        ordering = ("-created_at",)
+
+    def __str__(self):
+        return f"Sync {self.created_at:%Y-%m-%d %H:%M} · {self.status}"
+
+    @property
+    def progress(self):
+        """Pourcentage d'avancement (0–100)."""
+        if self.status == self.Status.DONE:
+            return 100
+        if not self.days_total:
+            return 0
+        return int(self.days_done * 100 / self.days_total)
+
+    def append_log(self, line):
+        """Ajoute une ligne horodatée au journal (borné pour ne pas exploser)."""
+        from django.utils import timezone as _tz
+        stamp = _tz.localtime().strftime("%H:%M:%S")
+        self.log = (self.log + f"[{stamp}] {line}\n")[-8000:]

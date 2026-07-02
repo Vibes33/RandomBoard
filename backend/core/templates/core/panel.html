@@ -88,6 +88,20 @@
   .empty{color:var(--faint);text-align:center;padding:26px;font-size:13px}
   .spin{color:var(--faint);text-align:center;padding:26px;font-size:13px}
 
+  .prog{height:10px;border-radius:6px;background:rgba(255,255,255,.08);overflow:hidden;margin:12px 0}
+  .prog>i{display:block;height:100%;width:0;transition:width .4s var(--ease);
+    background:linear-gradient(90deg,var(--green),var(--green-b))}
+  .logbox{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;line-height:1.5;
+    color:var(--muted);background:rgba(0,0,0,.32);border:1px solid var(--line);border-radius:10px;
+    padding:11px 13px;max-height:300px;overflow:auto;white-space:pre-wrap;margin-top:10px}
+  .stat{display:flex;gap:18px;flex-wrap:wrap;font-size:12px;color:var(--muted);margin-bottom:6px}
+  .stat b{color:var(--txt);font-variant-numeric:tabular-nums}
+  .badge{display:inline-block;padding:2px 9px;border-radius:6px;font-size:11px;font-weight:600}
+  .badge.running{background:rgba(74,163,255,.16);color:var(--blue)}
+  .badge.done{background:rgba(143,224,58,.15);color:var(--green)}
+  .badge.error{background:rgba(255,95,95,.15);color:var(--red)}
+  .badge.pending{background:rgba(233,197,59,.15);color:var(--gold)}
+
   #toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%) translateY(30px);opacity:0;
     background:var(--panel-2);border:1px solid var(--line-hi);color:var(--txt);padding:11px 20px;border-radius:12px;
     font-size:13px;backdrop-filter:blur(14px);transition:.3s var(--ease);z-index:50;box-shadow:0 10px 30px rgba(0,0,0,.4)}
@@ -112,6 +126,7 @@
     <div class="tab" data-tab="points">🎯 Options de Points</div>
     <div class="tab" data-tab="days">📅 Gestion par Jour</div>
     <div class="tab" data-tab="hosts">🖥 Places &amp; Hosts</div>
+    <div class="tab" data-tab="sync">🔄 Synchronisation</div>
   </div>
 
   <section class="pane on" id="p-pools">
@@ -183,6 +198,24 @@
     </div>
   </section>
 
+  <section class="pane" id="p-sync">
+    <div class="sec">Lancer l'ingestion des données depuis l'API 42 — puis automatique toutes les 10 min</div>
+    <div class="cols">
+      <div class="card" style="padding:18px">
+        <div class="sec">Nouvelle synchronisation</div>
+        <div class="row-in"><label>Du (option.)</label><input type="date" id="sync-from"></div>
+        <div class="row-in"><label>Au (option.)</label><input type="date" id="sync-to"></div>
+        <div class="calc" style="margin:2px 0 14px">Vide = dates détectées automatiquement via le cursus piscine.</div>
+        <button id="sync-start">🚀 Lancer la synchronisation</button>
+        <div id="sync-hist" style="margin-top:18px"></div>
+      </div>
+      <div class="card" style="padding:18px">
+        <div class="sec">Avancement</div>
+        <div id="sync-state"><div class="empty">Aucune synchronisation lancée.</div></div>
+      </div>
+    </div>
+  </section>
+
   <div id="toast"></div>
 
 <script>
@@ -205,7 +238,7 @@ const chip=c=>`<span class="chip ${c}">${c}</span>`;
 
 /* ── tabs (lazy) ── */
 const inited={};
-const init={pools:initPools,users:loadUsers,logs:initLogs,points:loadPoints,days:initDays,hosts:initHosts};
+const init={pools:initPools,users:loadUsers,logs:initLogs,points:loadPoints,days:initDays,hosts:initHosts,sync:initSync};
 $$('.tab').forEach(t=>t.onclick=()=>{
   $$('.tab').forEach(x=>x.classList.toggle('on',x===t));
   $$('.pane').forEach(p=>p.classList.toggle('on',p.id==='p-'+t.dataset.tab));
@@ -361,6 +394,56 @@ async function loadHosts(){
   const row=h=>`<div class="host"><span class="hn">${h}</span></div>`;
   $('#h-shiny').innerHTML=d.shiny&&d.shiny.length?d.shiny.map(row).join(''):'<div class="empty">Aucune — lance un tirage 🎲</div>';
   $('#h-cursed').innerHTML=d.cursed&&d.cursed.length?d.cursed.map(row).join(''):'<div class="empty">Aucune — lance un tirage 🎲</div>';
+}
+
+/* ── 6. Synchronisation API ── */
+let syncPoll=null;
+async function initSync(){
+  $('#sync-start').onclick=startSync;
+  await refreshSync();
+}
+async function startSync(){
+  const body={};
+  if($('#sync-from').value)body.date_from=$('#sync-from').value;
+  if($('#sync-to').value)body.date_to=$('#sync-to').value;
+  const r=await api('/panel/api/sync','POST',body);
+  toast('Synchronisation lancée');
+  pollSync(r.id); refreshSync();
+}
+async function refreshSync(){
+  const d=await api('/panel/api/sync');
+  renderSyncState(d.current);
+  $('#sync-hist').innerHTML='<div class="sec" style="margin-top:2px">Historique</div>'+
+    (d.history.length?d.history.map(h=>`<div class="host"><span class="hn">#${h.id} · ${h.pool||'—'}</span>
+      <span class="meta"><span class="badge ${h.status}">${h.status}</span> ${h.events} ev · ${h.at}</span></div>`).join('')
+    :'<div class="empty">Aucun run.</div>');
+  if(d.running&&d.current)pollSync(d.current.id);
+}
+function pollSync(id){
+  if(syncPoll)clearInterval(syncPoll);
+  syncPoll=setInterval(async()=>{
+    const {run}=await api('/panel/api/sync/status?id='+id);
+    renderSyncState(run);
+    if(run&&(run.status==='done'||run.status==='error')){
+      clearInterval(syncPoll);syncPoll=null;
+      toast(run.status==='done'?'Synchronisation terminée ✓':'Synchronisation en erreur',run.status==='error');
+      refreshSync();
+    }
+  },2000);
+}
+function renderSyncState(run){
+  const box=$('#sync-state');
+  if(!run){box.innerHTML='<div class="empty">Aucune synchronisation lancée.</div>';return;}
+  box.innerHTML=`
+    <div class="stat"><span>Statut <b><span class="badge ${run.status}">${run.status}</span></b></span>
+      <span>Piscine <b>${run.pool||'—'}</b></span></div>
+    <div class="stat"><span>Jour <b>${run.current_day||'—'}</b></span>
+      <span>Progression <b>${run.days_done}/${run.days_total||'?'}</b></span>
+      <span>Events <b>${run.events}</b></span></div>
+    <div class="prog"><i style="width:${run.progress}%"></i></div>
+    ${run.error?`<div class="neg" style="font-size:12px;margin:6px 0">${run.error}</div>`:''}
+    <div class="logbox" id="sync-log">${(run.log||'').replace(/</g,'&lt;')}</div>`;
+  const lb=$('#sync-log'); if(lb)lb.scrollTop=lb.scrollHeight;
 }
 
 /* init premier onglet */
