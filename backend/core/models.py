@@ -386,10 +386,12 @@ class SyncRun(models.Model):
         RUNNING = "running", "En cours"
         DONE = "done", "Terminé"
         ERROR = "error", "Erreur"
+        CANCELLED = "cancelled", "Annulé"
 
     pool = models.ForeignKey(Pool, on_delete=models.CASCADE, related_name="sync_runs",
                              null=True, blank=True)
     status = models.CharField(max_length=12, choices=Status.choices, default=Status.PENDING)
+    cancel_requested = models.BooleanField(default=False)
     date_from = models.DateField(null=True, blank=True)
     date_to = models.DateField(null=True, blank=True)
     days_total = models.PositiveIntegerField(default=0)

@@ -24,6 +24,14 @@ def run_sync(sync_run_id):
     if not run:
         return {"error": "SyncRun introuvable"}
 
+    # Annulation demandée avant même le démarrage du worker.
+    if run.cancel_requested:
+        run.status = SyncRun.Status.CANCELLED
+        run.finished_at = timezone.now()
+        run.append_log("Annulé avant démarrage.")
+        run.save()
+        return {"cancelled": True}
+
     run.status = SyncRun.Status.RUNNING
     run.started_at = timezone.now()
     run.append_log("Démarrage de la synchronisation…")
@@ -56,19 +64,26 @@ def run_sync(sync_run_id):
             run.save(update_fields=["current_day", "days_done", "days_total",
                                     "events_ingested"])
 
+        def should_cancel():
+            return SyncRun.objects.filter(id=run.id, cancel_requested=True).exists()
+
         summary = run_full_sync(
             client=client, pool=pool, campus=campus, cursus=cursus,
             d_from=run.date_from, d_to=run.date_to,
-            on_log=on_log, on_progress=on_progress,
+            on_log=on_log, on_progress=on_progress, should_cancel=should_cancel,
         )
-        run.status = SyncRun.Status.DONE
         run.finished_at = timezone.now()
-        run.days_done = run.days_total = summary["total_days"]
         run.events_ingested = summary["total_events"]
         run.date_from, run.date_to = summary["d_from"], summary["d_to"]
-        run.append_log(f"Terminé · {summary['total_events']} events ingérés.")
+        if summary["cancelled"]:
+            run.status = SyncRun.Status.CANCELLED
+            run.append_log(f"Annulé · {summary['total_events']} events déjà ingérés.")
+        else:
+            run.status = SyncRun.Status.DONE
+            run.days_done = run.days_total = summary["total_days"]
+            run.append_log(f"Terminé · {summary['total_events']} events ingérés.")
         run.save()
-        return {"ok": True, "events": summary["total_events"]}
+        return {"ok": True, "cancelled": summary["cancelled"], "events": summary["total_events"]}
     except Exception as ex:  # noqa: BLE001
         run.status = SyncRun.Status.ERROR
         run.finished_at = timezone.now()

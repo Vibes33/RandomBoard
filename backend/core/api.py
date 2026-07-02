@@ -15,6 +15,7 @@ from django.db import transaction
 from django.db.models import Count, Q
 from django.http import HttpResponseBadRequest, JsonResponse
 from django.shortcuts import render
+from django.utils import timezone
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.views.decorators.http import require_http_methods
 
@@ -376,6 +377,26 @@ def api_sync_status(request):
     run = (SyncRun.objects.filter(id=run_id).first() if run_id
            else SyncRun.objects.first())
     return JsonResponse({"run": _run_payload(run)})
+
+
+@staff_required
+@require_http_methods(["POST"])
+def api_sync_cancel(request):
+    """Annule la synchronisation en cours (arrêt coopératif ; débloque aussi un
+    run 'pending' resté coincé faute de worker)."""
+    run = SyncRun.objects.filter(
+        status__in=[SyncRun.Status.PENDING, SyncRun.Status.RUNNING]).first()
+    if not run:
+        return HttpResponseBadRequest("Aucune synchronisation en cours.")
+    # On clôture immédiatement pour débloquer l'UI, même si le worker est mort
+    # (run orphelin). Un worker encore vivant verra cancel_requested et s'arrêtera
+    # proprement entre deux jours (les events déjà ingérés sont conservés).
+    run.cancel_requested = True
+    run.status = SyncRun.Status.CANCELLED
+    run.finished_at = timezone.now()
+    run.append_log("Annulation demandée — synchronisation arrêtée.")
+    run.save(update_fields=["cancel_requested", "status", "finished_at", "log"])
+    return JsonResponse({"ok": True, "status": run.status})
 
 
 @staff_required

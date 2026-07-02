@@ -101,6 +101,8 @@
   .badge.done{background:rgba(143,224,58,.15);color:var(--green)}
   .badge.error{background:rgba(255,95,95,.15);color:var(--red)}
   .badge.pending{background:rgba(233,197,59,.15);color:var(--gold)}
+  .badge.cancelled{background:rgba(234,242,236,.12);color:var(--muted)}
+  button.danger{background:rgba(255,95,95,.14);color:#ffb4b4;border-color:rgba(255,95,95,.3)}
 
   .switch{position:relative;display:inline-block;width:46px;height:26px;flex:none}
   .switch input{opacity:0;width:0;height:0}
@@ -486,9 +488,13 @@ function pollSync(id){
 function renderSyncState(run){
   const box=$('#sync-state');
   if(!run){box.innerHTML='<div class="empty">Aucune synchronisation lancée.</div>';return;}
+  const active=(run.status==='pending'||run.status==='running');
   box.innerHTML=`
-    <div class="stat"><span>Statut <b><span class="badge ${run.status}">${run.status}</span></b></span>
-      <span>Piscine <b>${run.pool||'—'}</b></span></div>
+    <div class="stat" style="align-items:center">
+      <span>Statut <b><span class="badge ${run.status}">${run.status}</span></b></span>
+      <span>Piscine <b>${run.pool||'—'}</b></span>
+      <div class="grow"></div>
+      ${active?'<button class="mini danger" id="sync-cancel">✕ Annuler</button>':''}</div>
     <div class="stat"><span>Jour <b>${run.current_day||'—'}</b></span>
       <span>Progression <b>${run.days_done}/${run.days_total||'?'}</b></span>
       <span>Events <b>${run.events}</b></span></div>
@@ -496,6 +502,12 @@ function renderSyncState(run){
     ${run.error?`<div class="neg" style="font-size:12px;margin:6px 0">${run.error}</div>`:''}
     <div class="logbox" id="sync-log">${(run.log||'').replace(/</g,'&lt;')}</div>`;
   const lb=$('#sync-log'); if(lb)lb.scrollTop=lb.scrollHeight;
+  const cb=$('#sync-cancel'); if(cb)cb.onclick=cancelSync;
+}
+async function cancelSync(){
+  const cb=$('#sync-cancel'); if(cb){cb.disabled=true;cb.textContent='⏳ Annulation…';}
+  try{ await api('/panel/api/sync/cancel','POST',{}); toast('Annulation demandée'); refreshSync(); }
+  catch(e){ if(cb){cb.disabled=false;cb.textContent='✕ Annuler';} }
 }
 
 /* init premier onglet */

@@ -71,13 +71,16 @@ def detect_dates(client, logins, cursus_id):
 
 
 def run_full_sync(*, client, pool, campus, cursus, d_from=None, d_to=None,
-                  skip_users=False, on_log=None, on_progress=None):
+                  skip_users=False, on_log=None, on_progress=None, should_cancel=None):
     """
     Rejoue/ingère `pool` jour par jour depuis l'API 42.
-    Retourne un résumé {d_from, d_to, total_days, total_events, users}.
+    `should_cancel()` (optionnel) est consulté entre chaque jour : renvoyer True
+    interrompt proprement le rejeu. Retourne un résumé
+    {d_from, d_to, total_days, total_events, users, cancelled}.
     """
     log = on_log or (lambda *_: None)
     prog = on_progress or (lambda **_: None)
+    cancel = should_cancel or (lambda: False)
     tz = timezone.get_current_timezone()
 
     # 1) étudiants de la session
@@ -103,9 +106,13 @@ def run_full_sync(*, client, pool, campus, cursus, d_from=None, d_to=None,
     # 3) rejeu jour par jour
     total_days = (d_to - d_from).days + 1
     log(f"Rejeu {d_from} → {d_to} · campus {campus} · {len(users)} étudiants")
-    day, idx, total_events = d_from, 0, 0
+    day, idx, total_events, cancelled = d_from, 0, 0, False
     fmt = "%Y-%m-%dT%H:%M:%SZ"
     while day <= d_to:
+        if cancel():
+            log("Annulation demandée — arrêt du rejeu.")
+            cancelled = True
+            break
         idx += 1
         start = dt.datetime.combine(day, dt.time.min, tzinfo=tz).astimezone(dt.timezone.utc)
         end = start + dt.timedelta(days=1)
@@ -127,4 +134,4 @@ def run_full_sync(*, client, pool, campus, cursus, d_from=None, d_to=None,
         day += dt.timedelta(days=1)
 
     return {"d_from": d_from, "d_to": d_to, "total_days": total_days,
-            "total_events": total_events, "users": len(users)}
+            "total_events": total_events, "users": len(users), "cancelled": cancelled}
