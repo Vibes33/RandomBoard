@@ -333,6 +333,26 @@ def fetch_campus_users(client, campus_id, pool_year=None, pool_month=None, inclu
     return out
 
 
+def fetch_pools(client, campus_id, max_pages=12):
+    """
+    Découvre les piscines (couples pool_year / pool_month distincts) d'un campus
+    depuis l'API 42. Scan borné : étudiants triés par année décroissante pour
+    faire remonter les piscines récentes en premier (max_pages × 100 étudiants).
+    Retourne [{pool_year, pool_month, count}] trié du plus récent au plus ancien.
+    """
+    params = {"filter[primary_campus_id]": campus_id, "filter[staff?]": "false",
+              "sort": "-pool_year"}
+    seen = {}
+    for u in client.paginate("/v2/users", params, page_size=100, max_pages=max_pages):
+        year, month = u.get("pool_year"), u.get("pool_month")
+        if not year or not month:
+            continue
+        key = (str(year), str(month).lower())
+        seen[key] = seen.get(key, 0) + 1
+    return [{"pool_year": y, "pool_month": m, "count": c}
+            for (y, m), c in sorted(seen.items(), reverse=True)]
+
+
 def sync_users(pool, users_data):
     """Crée/actualise les AppUser de la Piscine à partir des données 42."""
     created = updated = 0

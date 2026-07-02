@@ -146,6 +146,9 @@
       <label style="font-size:12px;color:var(--muted);display:flex;align-items:center;gap:6px">
         <input type="checkbox" id="pool-active" style="width:auto"> actives seulement</label>
       <button class="mini" id="pool-apply">Appliquer</button>
+      <div class="grow"></div>
+      <button class="mini ghost" id="pool-refresh">🔄 Réactualiser</button>
+      <button class="mini" id="pool-discover">🔍 Découvrir depuis l'API 42</button>
     </div>
     <div class="card"><table><thead><tr>
       <th>Piscine</th><th>Période</th><th class="num">Users</th><th class="num">Events</th>
@@ -273,8 +276,21 @@ async function initPools(){
   $('#pool-apply').onclick=loadPools;
   $('#pool-active').onchange=loadPools;
   $('#pool-year').onchange=loadPools;
+  $('#pool-refresh').onclick=loadPools;
+  $('#pool-discover').onclick=discoverPools;
   $('#pool-q').addEventListener('keydown',e=>{if(e.key==='Enter')loadPools();});
   renderPools(d.pools);
+}
+async function discoverPools(){
+  const b=$('#pool-discover'); b.disabled=true; const txt=b.textContent;
+  b.textContent='⏳ Recherche…'; toast('Découverte des piscines via l\'API 42…');
+  try{
+    const r=await api('/panel/api/pools/discover','POST',{});
+    toast(`${r.found} piscine(s) trouvée(s) · ${r.created} ajoutée(s)`);
+    $('#pool-year').innerHTML='<option value="">Toutes les années</option>'+
+      (await api('/panel/api/pools')).years.map(y=>`<option>${y}</option>`).join('');
+    await loadPools();
+  }finally{ b.disabled=false; b.textContent=txt; }
 }
 async function loadPools(){
   const p=new URLSearchParams();

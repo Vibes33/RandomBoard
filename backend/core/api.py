@@ -101,6 +101,34 @@ def api_pools(request):
 
 @staff_required
 @require_http_methods(["POST"])
+def api_pools_discover(request):
+    """Va chercher la liste des piscines directement sur l'API 42 et crée les
+    Pool manquants (inactifs). Sert de bouton « réactualiser depuis l'API »."""
+    from .ft_api import FtClient
+    from .sync import fetch_pools
+    from .sync_runner import get_or_create_pool, resolve_target
+
+    client = FtClient()
+    if not client.configured:
+        return HttpResponseBadRequest("Aucune clé API configurée (voir .env).")
+    campus, _ = resolve_target()
+    if not campus:
+        return HttpResponseBadRequest("FT_CAMPUS_ID non défini.")
+    try:
+        found = fetch_pools(client, campus)
+    except Exception as ex:  # noqa: BLE001
+        return HttpResponseBadRequest(f"Erreur API 42 : {ex}")
+
+    created = 0
+    for p in found:
+        _, was_created = get_or_create_pool(
+            campus, year=p["pool_year"], month=p["pool_month"], activate=False)
+        created += int(was_created)
+    return JsonResponse({"ok": True, "found": len(found), "created": created})
+
+
+@staff_required
+@require_http_methods(["POST"])
 def api_pool_activate(request, pool_id):
     """Définit UNE piscine active (désactive toutes les autres, atomique)."""
     pool = Pool.objects.filter(id=pool_id).first()
