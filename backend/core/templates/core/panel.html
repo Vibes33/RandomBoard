@@ -106,14 +106,31 @@
   </header>
 
   <div class="tabs">
-    <div class="tab on" data-tab="users">👥 Users</div>
+    <div class="tab on" data-tab="pools">🏊 Piscines</div>
+    <div class="tab" data-tab="users">👥 Users</div>
     <div class="tab" data-tab="logs">📜 Logs</div>
     <div class="tab" data-tab="points">🎯 Options de Points</div>
     <div class="tab" data-tab="days">📅 Gestion par Jour</div>
     <div class="tab" data-tab="hosts">🖥 Places &amp; Hosts</div>
   </div>
 
-  <section class="pane on" id="p-users">
+  <section class="pane on" id="p-pools">
+    <div class="sec">Choisis la piscine active — le panel entier opère dessus</div>
+    <div class="bar">
+      <span class="sec" style="margin:0">Filtrer</span>
+      <input id="pool-q" placeholder="Rechercher par nom…" style="width:210px">
+      <select id="pool-year"><option value="">Toutes les années</option></select>
+      <label style="font-size:12px;color:var(--muted);display:flex;align-items:center;gap:6px">
+        <input type="checkbox" id="pool-active" style="width:auto"> actives seulement</label>
+      <button class="mini" id="pool-apply">Appliquer</button>
+    </div>
+    <div class="card"><table><thead><tr>
+      <th>Piscine</th><th>Période</th><th class="num">Users</th><th class="num">Events</th>
+      <th>Statut</th><th style="width:140px">Action</th>
+    </tr></thead><tbody id="pools-tb"><tr><td colspan="6" class="spin">Chargement…</td></tr></tbody></table></div>
+  </section>
+
+  <section class="pane" id="p-users">
     <div class="sec">Classement &amp; ajustement manuel des scores</div>
     <div class="card"><table><thead><tr>
       <th class="rk">#</th><th>Login</th><th>Nom</th><th class="num">Score</th><th style="width:210px">Ajuster</th>
@@ -188,12 +205,48 @@ const chip=c=>`<span class="chip ${c}">${c}</span>`;
 
 /* ── tabs (lazy) ── */
 const inited={};
-const init={users:loadUsers,logs:initLogs,points:loadPoints,days:initDays,hosts:initHosts};
+const init={pools:initPools,users:loadUsers,logs:initLogs,points:loadPoints,days:initDays,hosts:initHosts};
 $$('.tab').forEach(t=>t.onclick=()=>{
   $$('.tab').forEach(x=>x.classList.toggle('on',x===t));
   $$('.pane').forEach(p=>p.classList.toggle('on',p.id==='p-'+t.dataset.tab));
   if(!inited[t.dataset.tab]){inited[t.dataset.tab]=1;init[t.dataset.tab]();}
 });
+
+/* ── 0. Piscines ── */
+async function initPools(){
+  const d=await api('/panel/api/pools');
+  $('#pool-year').innerHTML='<option value="">Toutes les années</option>'+d.years.map(y=>`<option>${y}</option>`).join('');
+  $('#pool-apply').onclick=loadPools;
+  $('#pool-active').onchange=loadPools;
+  $('#pool-year').onchange=loadPools;
+  $('#pool-q').addEventListener('keydown',e=>{if(e.key==='Enter')loadPools();});
+  renderPools(d.pools);
+}
+async function loadPools(){
+  const p=new URLSearchParams();
+  if($('#pool-q').value.trim())p.set('q',$('#pool-q').value.trim());
+  if($('#pool-year').value)p.set('year',$('#pool-year').value);
+  if($('#pool-active').checked)p.set('active','1');
+  const d=await api('/panel/api/pools?'+p.toString());
+  renderPools(d.pools);
+}
+function renderPools(pools){
+  $('#pools-tb').innerHTML=pools.length?pools.map(p=>`<tr>
+    <td><b>${p.name}</b><div style="font-size:11px;color:var(--faint)">${p.slug}</div></td>
+    <td class="meta">${p.starts_on} → ${p.ends_on}</td>
+    <td class="num">${p.users}</td><td class="num">${p.events}</td>
+    <td>${p.is_active?'<span class="chip gain">● active</span>':'<span style="color:var(--faint)">—</span>'}</td>
+    <td>${p.is_active?'<span style="font-size:12px;color:var(--muted)">piscine active</span>'
+       :`<button class="mini" data-act="${p.id}">Définir active</button>`}</td>
+  </tr>`).join('')
+  :'<tr><td colspan="6" class="empty">Aucune piscine. Lance <code>ft_replay</code> pour en créer une.</td></tr>';
+  $('#pools-tb').querySelectorAll('[data-act]').forEach(b=>b.onclick=()=>activatePool(b.dataset.act));
+}
+async function activatePool(id){
+  const r=await api('/panel/api/pools/'+id+'/activate','POST',{});
+  toast('Piscine active → '+r.active+' · rechargement…');
+  setTimeout(()=>location.reload(),700);
+}
 
 /* ── 1. Users ── */
 async function loadUsers(){
@@ -311,7 +364,7 @@ async function loadHosts(){
 }
 
 /* init premier onglet */
-inited.users=1; loadUsers();
+inited.pools=1; initPools();
 </script>
 </body>
 </html>

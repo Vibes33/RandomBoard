@@ -1,7 +1,7 @@
 """
 Panel admin — API JSON (reconstruite de zéro).
 
-5 onglets : Users · Logs · Options de Points · Gestion par Jour · Places & Hosts.
+Onglets : Piscines · Users · Logs · Options de Points · Gestion par Jour · Places & Hosts.
 Tout est staff-only + CSRF, opère sur la Piscine active.
 
 Modèle de scoring : UN multiplicateur par (jour × type d'event).
@@ -12,6 +12,8 @@ from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation
 
 from django.contrib.admin.views.decorators import staff_member_required
+from django.db import transaction
+from django.db.models import Count, Q
 from django.http import HttpResponseBadRequest, JsonResponse
 from django.shortcuts import render
 from django.views.decorators.csrf import ensure_csrf_cookie
@@ -67,6 +69,46 @@ def panel(request):
         "pool": pool,
         "pool_period": (f"{pool.starts_on:%d/%m/%Y} → {pool.ends_on:%d/%m/%Y}" if pool else "—"),
     })
+
+
+# ─────────────────────────── 0. Piscines ───────────────────────────
+@staff_member_required
+def api_pools(request):
+    """Liste des piscines (avec filtres) + années disponibles pour le filtre."""
+    qs = Pool.objects.all().order_by("-starts_on")
+    q = request.GET.get("q", "").strip()
+    if q:
+        qs = qs.filter(Q(name__icontains=q) | Q(slug__icontains=q))
+    year = request.GET.get("year", "").strip()
+    if year.isdigit():
+        qs = qs.filter(starts_on__year=int(year))
+    if request.GET.get("active") in ("1", "true"):
+        qs = qs.filter(is_active=True)
+    qs = qs.annotate(n_users=Count("users", distinct=True))
+
+    events = {r["pool"]: r["n"]
+              for r in EventLog.objects.values("pool").annotate(n=Count("id"))}
+    pools = [{
+        "id": p.id, "name": p.name, "slug": p.slug,
+        "starts_on": str(p.starts_on), "ends_on": str(p.ends_on),
+        "is_active": p.is_active, "users": p.n_users, "events": events.get(p.id, 0),
+    } for p in qs]
+    years = sorted({d.year for d in Pool.objects.values_list("starts_on", flat=True)},
+                   reverse=True)
+    return JsonResponse({"pools": pools, "years": years})
+
+
+@staff_member_required
+@require_http_methods(["POST"])
+def api_pool_activate(request, pool_id):
+    """Définit UNE piscine active (désactive toutes les autres, atomique)."""
+    pool = Pool.objects.filter(id=pool_id).first()
+    if not pool:
+        return HttpResponseBadRequest("Piscine introuvable.")
+    with transaction.atomic():
+        Pool.objects.exclude(id=pool.id).update(is_active=False)
+        Pool.objects.filter(id=pool.id).update(is_active=True)
+    return JsonResponse({"ok": True, "active": pool.name})
 
 
 # ─────────────────────────── 1. Users ───────────────────────────
