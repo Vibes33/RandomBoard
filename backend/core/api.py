@@ -515,3 +515,56 @@ def api_autosync(request):
         "next_in": next_in, "total_runs": pt.total_run_count,
         "pool": pool.name if pool else None,
     })
+
+
+# ─────────────────────── 7. Chaos absolu (Peste & Choléra…) ───────────────────────
+def _cfg_payload(cfg):
+    return {
+        "rank_mult_active": cfg.rank_mult_active,
+        "rank_mult_first": float(cfg.rank_mult_first),
+        "rank_mult_last": float(cfg.rank_mult_last),
+        "stacking_active": cfg.stacking_active,
+        "stacking_penalty_pct": float(cfg.stacking_penalty_pct),
+        "stacking_endgame_buff": float(cfg.stacking_endgame_buff),
+        "plague_seeded": cfg.plague_seeded,
+        "plague_payout": float(cfg.plague_payout),
+    }
+
+
+@staff_required
+@require_http_methods(["GET", "POST"])
+def api_plague(request):
+    """Onglet Chaos : stats Peste & Choléra en temps réel + config + actions."""
+    from .chaos import (get_config, plague_endgame, plague_stats, seed_plague,
+                        stacking_endgame)
+    pool = _pool()
+    if not pool:
+        return JsonResponse({"stats": None, "config": None})
+
+    if request.method == "GET":
+        return JsonResponse({"stats": plague_stats(pool), "config": _cfg_payload(get_config(pool))})
+
+    data = _json(request)
+    action = data.get("action")
+    if action == "seed":
+        return JsonResponse({"ok": True, "seeded": seed_plague(pool, reseed=True)})
+    if action == "payout":
+        return JsonResponse({"ok": True, **plague_endgame(pool)})
+    if action == "stacking_buff":
+        return JsonResponse({"ok": True, "winner": stacking_endgame(pool)})
+    if action == "config":
+        cfg = get_config(pool)
+        try:
+            for f in ("rank_mult_active", "stacking_active"):
+                if f in data:
+                    setattr(cfg, f, bool(data[f]))
+            for f in ("rank_mult_first", "rank_mult_last", "stacking_penalty_pct",
+                      "stacking_endgame_buff", "plague_payout"):
+                if data.get(f) not in (None, ""):
+                    setattr(cfg, f, _dec(data[f]))
+        except (InvalidOperation, TypeError):
+            return HttpResponseBadRequest("Valeur de config invalide.")
+        cfg.save()
+        recompute_from(pool, pool.starts_on)  # rank mult / stacking impactent les scores
+        return JsonResponse({"ok": True, "config": _cfg_payload(cfg)})
+    return HttpResponseBadRequest("Action inconnue.")

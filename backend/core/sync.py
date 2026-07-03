@@ -276,11 +276,13 @@ def sync_flags(pool, flags, users=None):
 
 def sync_all(pool, data):
     users = _users(pool)
+    from .chaos import spread_plague
     return {
         "locations": sync_locations(pool, data.get("locations", []), users),
         "feedbacks": sync_feedbacks(pool, data.get("feedbacks", []), users),
         "evaluations": sync_evaluations(pool, data.get("evaluations", []), users),
         "flags": sync_flags(pool, data.get("flags", []), users),
+        "plague": spread_plague(pool, data.get("pairs", [])),
     }
 
 
@@ -331,7 +333,7 @@ def fetch_scale_teams_range(client, campus_id, start_iso, end_iso, cursus_id=Non
     params = {"filter[campus_id]": campus_id, "range[begin_at]": f"{start_iso},{end_iso}"}
     if cursus_id:
         params["filter[cursus_id]"] = cursus_id
-    feedbacks, evaluations, flags = [], [], []
+    feedbacks, evaluations, flags, pairs = [], [], [], []
     for st in client.paginate("/v2/scale_teams", params, page_size=100):
         sid = st.get("id")
         corrector = (st.get("corrector") or {}).get("login")
@@ -351,12 +353,15 @@ def fetch_scale_teams_range(client, campus_id, start_iso, end_iso, cursus_id=Non
             login = (c or {}).get("login")
             if not login:
                 continue
+            # couple correcteur↔corrigé (propagation Peste & Choléra)
+            if corrector and corrector != login:
+                pairs.append((corrector, login))
             if project:
                 evaluations.append({"id": f"{sid}:{login}", "login": login, "project": project,
                                     "begin_at": begin, "end_at": filled, "mark": mark})
             if flag_neg:
                 flags.append({"id": f"{sid}:{login}", "login": login, "flag": flag_name})
-    return {"feedbacks": feedbacks, "evaluations": evaluations, "flags": flags}
+    return {"feedbacks": feedbacks, "evaluations": evaluations, "flags": flags, "pairs": pairs}
 
 
 def fetch_campuses(client):

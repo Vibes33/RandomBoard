@@ -9,6 +9,8 @@ Principes structurants (cf. design) :
   C. Les règles sont versionnées dans le temps (RuleVersion.valid_from/valid_to) :
      le calcul d'un jour J utilise la version valide à J.
 """
+from decimal import Decimal
+
 from django.conf import settings
 from django.db import models
 
@@ -429,3 +431,63 @@ class SyncRun(models.Model):
         from django.utils import timezone as _tz
         stamp = _tz.localtime().strftime("%H:%M:%S")
         self.log = (self.log + f"[{stamp}] {line}\n")[-8000:]
+
+
+# ─────────────────────────────────────────────────────────────
+# Chaos absolu (étape 4.2) — config + mécaniques avancées
+# ─────────────────────────────────────────────────────────────
+class PoolConfig(models.Model):
+    """Boutons du chaos par Piscine (tout éditable, effets opt-in)."""
+    pool = models.OneToOneField(Pool, on_delete=models.CASCADE, related_name="config")
+    # Multiplicateur de classement (rubber-band : le dernier est le plus boosté)
+    rank_mult_active = models.BooleanField(default=False)
+    rank_mult_first = models.DecimalField(max_digits=6, decimal_places=3, default=Decimal("1.001"))
+    rank_mult_last = models.DecimalField(max_digits=6, decimal_places=3, default=Decimal("1.141"))
+    # Stacking (pénalité si on ne corrige pas + buff final au plus gros stackeur)
+    stacking_active = models.BooleanField(default=False)
+    stacking_penalty_pct = models.DecimalField(max_digits=6, decimal_places=2, default=Decimal("5"))
+    stacking_endgame_buff = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal("500"))
+    # Peste & Choléra
+    plague_seeded = models.BooleanField(default=False)
+    plague_payout = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal("50"))
+
+    def __str__(self):
+        return f"Config · {self.pool.slug}"
+
+
+class Infection(models.Model):
+    """La Peste & le Choléra : état d'infection d'un étudiant."""
+
+    class Disease(models.TextChoices):
+        PESTE = "peste", "Peste"
+        CHOLERA = "cholera", "Choléra"
+
+    pool = models.ForeignKey(Pool, on_delete=models.CASCADE, related_name="infections")
+    user = models.ForeignKey(AppUser, on_delete=models.CASCADE, related_name="infections")
+    disease = models.CharField(max_length=8, choices=Disease.choices)
+    source = models.ForeignKey(AppUser, on_delete=models.SET_NULL, null=True, blank=True,
+                               related_name="contaminations")
+    is_patient_zero = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = "Infection"
+        verbose_name_plural = "Infections"
+        unique_together = ("pool", "user")
+        ordering = ("-created_at",)
+
+    def __str__(self):
+        return f"{self.user.login} · {self.disease}"
+
+
+class StackLedger(models.Model):
+    """Cumul des points « empilés » (retenus faute d'avoir corrigé) par étudiant."""
+    pool = models.ForeignKey(Pool, on_delete=models.CASCADE, related_name="stacks")
+    user = models.ForeignKey(AppUser, on_delete=models.CASCADE, related_name="stacks")
+    total_stacked = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0"))
+
+    class Meta:
+        unique_together = ("pool", "user")
+
+    def __str__(self):
+        return f"{self.user.login} · stack {self.total_stacked}"

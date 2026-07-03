@@ -99,9 +99,11 @@ def nightly_snapshot():
     Job de minuit : fige la veille (jour qui vient de se clôturer) pour chaque
     Piscine active, puis verrouille son coefficient. Idempotent & rejouable.
     """
+    from .chaos import apply_stacking
     yesterday = timezone.localdate() - timedelta(days=1)
     summary = {}
     for pool in Pool.objects.filter(is_active=True):
+        apply_stacking(pool, yesterday)  # malus stacking sur le jour clôturé (opt-in)
         count = snapshot_day(pool, yesterday)
         DailyCoefficient.objects.filter(pool=pool, day=yesterday).update(locked=True)
         summary[pool.slug] = count

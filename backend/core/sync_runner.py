@@ -144,6 +144,8 @@ def run_full_sync(*, client, pool, campus, cursus, d_from=None, d_to=None,
                  + sync_feedbacks(pool, p["feedbacks"], users)
                  + sync_evaluations(pool, p["evaluations"], users)
                  + sync_flags(pool, p["flags"], users))
+            from .chaos import spread_plague
+            spread_plague(pool, p.get("pairs", []))  # propagation Peste & Choléra
             snapshot_day(pool, d)  # fige le jour, comme le cron de minuit
             total_events += n
             log(f"{d} · {len(p['locations'])} loc / {len(p['feedbacks'])} fb / "

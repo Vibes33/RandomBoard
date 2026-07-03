@@ -96,6 +96,13 @@ RULES = [
      {"type": "fixed", "points": 150}),
     ("cluster_bonus", "event", "Bonus/malus selon le cluster où l'élève est assis",
      {"type": "map_lookup", "key_field": "cluster", "default": 0, "map": {}}),
+    # ─── chaos absolu (étape 4.2) : montants portés par PoolConfig ───
+    ("stacking_penalty", "loss", "Stacking : malus si on ne corrige pas",
+     {"type": "from_context", "value_key": "points"}),
+    ("stacking_buff", "gain", "Stacking : buff final au plus gros stackeur",
+     {"type": "from_context", "value_key": "points"}),
+    ("plague_payout", "event", "Peste & Choléra : gain du groupe vainqueur",
+     {"type": "from_context", "value_key": "points"}),
 ]
 
 
@@ -163,4 +170,8 @@ RULE_FIELDS = {
     "cluster_bonus": [_f("map", "Cluster → points", "map"),
                       _f("default", "Points par défaut")],
     "manual_adjust": [],  # points fournis à la main au moment de l'ajustement
+    # Montants gérés par PoolConfig (onglet Chaos), pas de champ ici.
+    "stacking_penalty": [],
+    "stacking_buff": [],
+    "plague_payout": [],
 }
