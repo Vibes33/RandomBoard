@@ -1,18 +1,17 @@
 """
 Chaos absolu (étape 4.2).
 
-Trois mécaniques, toutes pilotées par PoolConfig (effets score opt-in) :
-  1. Multiplicateur de classement (rubber-band) : appliqué dans snapshot_day.
-  2. Stacking : malus quotidien à qui ne corrige pas + buff final au plus gros
-     stackeur.
-  3. La Peste & le Choléra : 8 patients zéro, propagation par correction, payout
-     de fin quand 100 % sont infectés.
+  - La Peste & le Choléra : 8 patients zéro (4+4) tirés au jour 1, propagation
+    par correction (échange si Peste rencontre Choléra). Boost versé 1 jour avant
+    l'exam final à la coalition la PLUS NOMBREUSE ; seul réglage = points par
+    personne (PoolConfig.plague_payout).
+  - Stacking (opt-in, conservé) : malus quotidien à qui ne corrige pas + buff
+    final au plus gros stackeur.
 
-Les fonctions « pures » (_rank_multiplier, _spread) sont isolées pour être
-testables sans base.
+La fonction pure `_spread` est isolée pour être testable sans base.
 """
 import random
-from datetime import datetime, time as dtime
+from datetime import datetime, time as dtime, timedelta
 from decimal import Decimal
 
 from django.db.models import Sum
@@ -39,16 +38,12 @@ def _void_daily(user_id, pool, event_type, day):
                             event_date=day, is_voided=False).update(is_voided=True)
 
 
-# ─────────────────────────── 1. Multiplicateur de classement ───────────────────────────
-def _rank_multiplier(rank, n, first, last):
-    """Interpole linéairement : rang 1 → first, rang n → last (dernier = max)."""
-    first, last = float(first), float(last)
-    if n <= 1:
-        return first
-    return first + ((rank - 1) / (n - 1)) * (last - first)
+def _void_all(pool, event_type):
+    """Annule tous les events d'un type pour la piscine (avant ré-écriture globale)."""
+    EventLog.objects.filter(pool=pool, event_type=event_type, is_voided=False).update(is_voided=True)
 
 
-# ─────────────────────────── 2. Stacking ───────────────────────────
+# ─────────────────────────── 1. Stacking (opt-in) ───────────────────────────
 def apply_stacking(pool, day):
     """
     Retire stacking_penalty_pct % des points GAGNÉS le jour aux étudiants qui
@@ -102,64 +97,69 @@ def stacking_endgame(pool):
 
 
 # ─────────────────────────── 3. La Peste & le Choléra ───────────────────────────
-def seed_plague(pool, n_each=4, reseed=False):
-    """Infecte 4 Peste + 4 Choléra (patients zéro) parmi les étudiants actifs."""
+def seed_plague(pool, n_each=4):
+    """
+    Infecte 4 Peste + 4 Choléra (patients zéro) tirés au hasard. Appelé
+    automatiquement au jour 1 ; ne fait rien si déjà semé (pas de reset).
+    """
     cfg = get_config(pool)
-    if cfg.plague_seeded and not reseed:
+    if cfg.plague_seeded:
         return {"already": True}
-    Infection.objects.filter(pool=pool).delete()
     users = list(AppUser.objects.filter(pool=pool, is_active=True))
     random.shuffle(users)
     picks = users[:2 * n_each]
-    rows = []
-    for i, u in enumerate(picks):
-        disease = Infection.Disease.PESTE if i < n_each else Infection.Disease.CHOLERA
-        rows.append(Infection(pool=pool, user=u, disease=disease, is_patient_zero=True))
-    Infection.objects.bulk_create(rows)
+    rows = [
+        Infection(pool=pool, user=u, is_patient_zero=True,
+                  disease=Infection.Disease.PESTE if i < n_each else Infection.Disease.CHOLERA)
+        for i, u in enumerate(picks)
+    ]
+    Infection.objects.bulk_create(rows, ignore_conflicts=True)
     cfg.plague_seeded = True
     cfg.save(update_fields=["plague_seeded"])
-    return {"peste": n_each, "cholera": min(n_each, max(0, len(picks) - n_each))}
+    return {"peste": min(n_each, len(picks)), "cholera": max(0, len(picks) - n_each)}
 
 
-def _spread(infected, pairs):
+def _spread(state, pairs):
     """
-    PUR : propage la maladie sur des couples de correction.
-    infected : {user_id: disease}. pairs : [(a_id, b_id), …].
-    Un couple où l'un est infecté et l'autre sain → le sain prend la maladie.
-    Renvoie la liste des nouvelles infections [(user_id, disease, source_id)].
-    Itère jusqu'à stabilité (une correction peut en déclencher une autre).
+    PUR, une seule passe (chaque correction = un événement) :
+      - infecté + sain      → le sain prend la maladie (propagation) ;
+      - Peste + Choléra     → les deux ÉCHANGENT de maladie ;
+      - même maladie / sains → rien.
+    state : {user_id: disease|None} (muté au fil des couples). pairs : [(a,b), …].
+    Renvoie [(user_id, disease, source_id, kind)] où kind ∈ {"infect","swap"}.
     """
-    infected = dict(infected)
-    new = []
-    changed = True
-    while changed:
-        changed = False
-        for a, b in pairs:
-            ai, bi = infected.get(a), infected.get(b)
-            if ai and not bi:
-                infected[b] = ai
-                new.append((b, ai, a))
-                changed = True
-            elif bi and not ai:
-                infected[a] = bi
-                new.append((a, bi, b))
-                changed = True
-    return new
+    changes = []
+    for a, b in pairs:
+        da, db = state.get(a), state.get(b)
+        if da and db:
+            if da != db:  # choléra rencontre peste → échange
+                state[a], state[b] = db, da
+                changes.append((a, db, b, "swap"))
+                changes.append((b, da, a, "swap"))
+        elif da and not db:
+            state[b] = da
+            changes.append((b, da, a, "infect"))
+        elif db and not da:
+            state[a] = db
+            changes.append((a, db, b, "infect"))
+    return changes
 
 
 def spread_plague(pool, pairs):
-    """Applique la propagation sur des couples (corrector_login, corrected_login)."""
+    """Applique propagation + échanges sur des couples (correcteur_login, corrigé_login)."""
     if not Infection.objects.filter(pool=pool).exists():
         return 0
     users = {u.login: u.id for u in AppUser.objects.filter(pool=pool)}
     id_pairs = [(users[a], users[b]) for a, b in pairs
                 if a in users and b in users and users[a] != users[b]]
-    infected = dict(Infection.objects.filter(pool=pool).values_list("user_id", "disease"))
-    new = _spread(infected, id_pairs)
-    Infection.objects.bulk_create(
-        [Infection(pool=pool, user_id=uid, disease=dis, source_id=src) for uid, dis, src in new],
-        ignore_conflicts=True)
-    return len(new)
+    state = dict(Infection.objects.filter(pool=pool).values_list("user_id", "disease"))
+    for uid, disease, src, kind in _spread(state, id_pairs):
+        if kind == "infect":
+            Infection.objects.get_or_create(
+                pool=pool, user_id=uid, defaults={"disease": disease, "source_id": src})
+        else:  # swap : on met simplement à jour la maladie
+            Infection.objects.filter(pool=pool, user_id=uid).update(disease=disease)
+    return len(id_pairs)
 
 
 def plague_stats(pool):
@@ -176,18 +176,18 @@ def plague_stats(pool):
             "patient_zero": sorted(i.user.login for i in members if i.is_patient_zero),
         }
     infected = len(infections)
-    all_infected = total > 0 and infected >= total
-    # meneur = groupe avec le plus d'infectés ; payout = groupe avec le plus de points
-    leader = max(groups, key=lambda d: groups[d]["count"]) if infected else None
-    points_leader = max(groups, key=lambda d: groups[d]["points"]) if infected else None
+    # coalition en tête = celle qui a le PLUS DE PERSONNES (c'est elle qui gagne)
+    p, c = groups[Infection.Disease.PESTE], groups[Infection.Disease.CHOLERA]
+    leader = None
+    if infected:
+        leader = (Infection.Disease.PESTE if p["count"] > c["count"]
+                  else Infection.Disease.CHOLERA if c["count"] > p["count"] else "égalité")
     return {
         "total": total, "infected": infected,
         "healthy": max(0, total - infected),
         "pct": round(100 * infected / total) if total else 0,
-        "all_infected": all_infected,
-        "peste": groups[Infection.Disease.PESTE],
-        "cholera": groups[Infection.Disease.CHOLERA],
-        "leader": leader, "points_leader": points_leader,
+        "peste": p, "cholera": c, "leader": leader,
+        "payout_day": str(pool.ends_on - timedelta(days=1)),
         "recent": [{"login": i.user.login, "disease": i.disease,
                     "source": i.source.login if i.source else None,
                     "zero": i.is_patient_zero}
@@ -197,18 +197,24 @@ def plague_stats(pool):
 
 def plague_endgame(pool):
     """
-    Quand TOUS les étudiants sont infectés : le groupe qui a le plus de points
-    fait gagner plague_payout à chacun de ses membres.
+    Boost de fin, versé 1 JOUR AVANT l'exam final : la coalition la PLUS
+    NOMBREUSE fait gagner plague_payout points À CHACUN de ses membres.
+    Idempotent (ré-écrit les events) → rejouable après un changement de réglage.
     """
-    stats = plague_stats(pool)
-    if not stats["all_infected"]:
+    from .services import recompute_from
+    peste = Infection.objects.filter(pool=pool, disease=Infection.Disease.PESTE).count()
+    cholera = Infection.objects.filter(pool=pool, disease=Infection.Disease.CHOLERA).count()
+    if peste == 0 and cholera == 0:
         return {"ready": False}
     cfg = get_config(pool)
-    winner = stats["points_leader"]
-    members = (Infection.objects.filter(pool=pool, disease=winner).select_related("user"))
+    winner = Infection.Disease.PESTE if peste >= cholera else Infection.Disease.CHOLERA
+    payout_day = pool.ends_on - timedelta(days=1)
+    members = Infection.objects.filter(pool=pool, disease=winner).select_related("user")
+    # on nettoie tout ancien payout (l'autre coalition a pu passer devant / réglage changé)
+    _void_all(pool, "plague_payout")
     for inf in members:
-        _void_daily(inf.user_id, pool, "plague_payout", pool.ends_on)
         record_event(user=inf.user, pool=pool, rule_key="plague_payout",
-                     occurred_at=_noon(pool.ends_on),
+                     occurred_at=_noon(payout_day),
                      context={"points": float(cfg.plague_payout)}, source=SYSTEM)
-    return {"ready": True, "winner": winner, "paid": members.count()}
+    recompute_from(pool, payout_day)
+    return {"ready": True, "winner": winner, "paid": members.count(), "day": str(payout_day)}

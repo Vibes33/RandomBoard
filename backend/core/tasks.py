@@ -127,6 +127,7 @@ def daily_derived():
       - places Bénites/Maudites du jour,
       puis ancienneté & aura.
     """
+    from .chaos import plague_endgame, seed_plague
     from .derived import apply_aura_penalty, apply_seniority, randomize_daily_hosts
     from .services import randomize_day_multipliers
     today = timezone.localdate()
@@ -135,13 +136,18 @@ def daily_derived():
         if not (pool.starts_on <= today <= pool.ends_on):
             out[pool.slug] = "hors période — ignoré"
             continue
+        seed_plague(pool)  # jour 1 : sème l'épidémie une seule fois (idempotent)
         mults = randomize_day_multipliers(pool, today, reseed=True, only_missing=True)
         hosts = randomize_daily_hosts(pool, today)
         weeks, _ = apply_seniority(pool)
         auras = apply_aura_penalty(pool)
-        out[pool.slug] = {"multiplicateurs": mults,
-                          "places": len(hosts["shiny"]) + len(hosts["cursed"]),
-                          "semaines": weeks, "auras": auras}
+        entry = {"multiplicateurs": mults,
+                 "places": len(hosts["shiny"]) + len(hosts["cursed"]),
+                 "semaines": weeks, "auras": auras}
+        # boost Peste & Choléra : 1 jour avant l'exam final
+        if today == pool.ends_on - timedelta(days=1):
+            entry["plague_endgame"] = plague_endgame(pool)
+        out[pool.slug] = entry
     return out
 
 

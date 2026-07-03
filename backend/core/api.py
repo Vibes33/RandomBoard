@@ -517,54 +517,29 @@ def api_autosync(request):
     })
 
 
-# ─────────────────────── 7. Chaos absolu (Peste & Choléra…) ───────────────────────
-def _cfg_payload(cfg):
-    return {
-        "rank_mult_active": cfg.rank_mult_active,
-        "rank_mult_first": float(cfg.rank_mult_first),
-        "rank_mult_last": float(cfg.rank_mult_last),
-        "stacking_active": cfg.stacking_active,
-        "stacking_penalty_pct": float(cfg.stacking_penalty_pct),
-        "stacking_endgame_buff": float(cfg.stacking_endgame_buff),
-        "plague_seeded": cfg.plague_seeded,
-        "plague_payout": float(cfg.plague_payout),
-    }
-
-
+# ─────────────────────── 7. Peste & Choléra ───────────────────────
 @staff_required
 @require_http_methods(["GET", "POST"])
 def api_plague(request):
-    """Onglet Chaos : stats Peste & Choléra en temps réel + config + actions."""
-    from .chaos import (get_config, plague_endgame, plague_stats, seed_plague,
-                        stacking_endgame)
+    """
+    Onglet Peste & Choléra : stats temps réel + unique réglage = points par
+    personne (versés à la coalition la plus nombreuse, 1 jour avant l'exam final).
+    """
+    from .chaos import get_config, plague_endgame, plague_stats
     pool = _pool()
     if not pool:
-        return JsonResponse({"stats": None, "config": None})
+        return JsonResponse({"stats": None, "points_per_person": None})
 
     if request.method == "GET":
-        return JsonResponse({"stats": plague_stats(pool), "config": _cfg_payload(get_config(pool))})
+        return JsonResponse({"stats": plague_stats(pool),
+                             "points_per_person": float(get_config(pool).plague_payout)})
 
-    data = _json(request)
-    action = data.get("action")
-    if action == "seed":
-        return JsonResponse({"ok": True, "seeded": seed_plague(pool, reseed=True)})
-    if action == "payout":
-        return JsonResponse({"ok": True, **plague_endgame(pool)})
-    if action == "stacking_buff":
-        return JsonResponse({"ok": True, "winner": stacking_endgame(pool)})
-    if action == "config":
-        cfg = get_config(pool)
-        try:
-            for f in ("rank_mult_active", "stacking_active"):
-                if f in data:
-                    setattr(cfg, f, bool(data[f]))
-            for f in ("rank_mult_first", "rank_mult_last", "stacking_penalty_pct",
-                      "stacking_endgame_buff", "plague_payout"):
-                if data.get(f) not in (None, ""):
-                    setattr(cfg, f, _dec(data[f]))
-        except (InvalidOperation, TypeError):
-            return HttpResponseBadRequest("Valeur de config invalide.")
-        cfg.save()
-        recompute_from(pool, pool.starts_on)  # rank mult / stacking impactent les scores
-        return JsonResponse({"ok": True, "config": _cfg_payload(cfg)})
-    return HttpResponseBadRequest("Action inconnue.")
+    # POST : met à jour les points par personne et rejoue le boost (idempotent).
+    cfg = get_config(pool)
+    try:
+        cfg.plague_payout = _dec(_json(request).get("points_per_person"))
+    except (InvalidOperation, TypeError):
+        return HttpResponseBadRequest("Nombre de points invalide.")
+    cfg.save(update_fields=["plague_payout"])
+    res = plague_endgame(pool)  # ré-applique le boost avec le nouveau montant
+    return JsonResponse({"ok": True, "points_per_person": float(cfg.plague_payout), "endgame": res})

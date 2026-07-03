@@ -266,54 +266,29 @@
   </section>
 
   <section class="pane" id="p-plague">
-    <div class="sec" id="pl-title">La Peste &amp; le Choléra — propagation par correction, en temps réel</div>
+    <div class="sec" id="pl-title">La Peste &amp; le Choléra — 4+4 tirés au jour 1, propagation par correction (échange si Peste ↔ Choléra)</div>
     <div class="card" style="padding:18px;margin-bottom:16px">
       <div class="stat">
         <span>Infectés <b id="pl-inf">—</b></span>
         <span>Sains <b id="pl-healthy">—</b></span>
         <span>Total <b id="pl-total">—</b></span>
-        <span>Meneur <b id="pl-leader">—</b></span>
+        <span>Coalition en tête <b id="pl-leader">—</b></span>
       </div>
       <div class="prog"><i id="pl-bar" style="width:0%"></i></div>
-      <div class="bar" style="margin-top:12px">
-        <button class="mini" id="pl-seed">🦠 Semer l'épidémie (4 Peste + 4 Choléra)</button>
-        <button class="mini" id="pl-payout">💰 Payout de fin</button>
-        <button class="mini ghost" id="pl-stackbuff">📦 Buff stacking</button>
-      </div>
     </div>
     <div class="cols">
-      <div class="card"><div class="hdr" style="color:var(--green)">🐀 Peste</div>
+      <div class="card"><div class="hdr" style="color:var(--green)">🐀 Peste <span id="pl-peste-n" class="calc"></span></div>
         <div style="padding:14px 16px" id="pl-peste"><div class="spin">Chargement…</div></div></div>
-      <div class="card"><div class="hdr" style="color:var(--blue)">💧 Choléra</div>
+      <div class="card"><div class="hdr" style="color:var(--blue)">💧 Choléra <span id="pl-cholera-n" class="calc"></span></div>
         <div style="padding:14px 16px" id="pl-cholera"><div class="spin">Chargement…</div></div></div>
     </div>
 
-    <div class="sec" style="margin-top:22px">Réglages du chaos</div>
-    <div class="bento">
-      <div class="box">
-        <div class="title">Multiplicateur de classement</div>
-        <div class="key">rubber-band · 1er → dernier</div>
-        <div class="row-in"><label>Activé</label>
-          <label class="switch"><input type="checkbox" id="cfg-rank-active"><span class="sl"></span></label></div>
-        <div class="row-in"><label>1er (×)</label><input type="number" step="0.001" id="cfg-rank-first"></div>
-        <div class="row-in"><label>Dernier (×)</label><input type="number" step="0.001" id="cfg-rank-last"></div>
-      </div>
-      <div class="box">
-        <div class="title">Stacking</div>
-        <div class="key">malus si pas de correction</div>
-        <div class="row-in"><label>Activé</label>
-          <label class="switch"><input type="checkbox" id="cfg-stack-active"><span class="sl"></span></label></div>
-        <div class="row-in"><label>Malus (%)</label><input type="number" step="0.5" id="cfg-stack-pct"></div>
-        <div class="row-in"><label>Buff final</label><input type="number" id="cfg-stack-buff"></div>
-      </div>
-      <div class="box">
-        <div class="title">Peste &amp; Choléra</div>
-        <div class="key">payout du groupe vainqueur</div>
-        <div class="row-in"><label>Payout / joueur</label><input type="number" id="cfg-payout"></div>
-        <div class="calc">Versé aux infectés du groupe le plus fort quand 100 % sont infectés.</div>
-      </div>
+    <div class="bar" style="margin-top:18px">
+      <span class="sec" style="margin:0">Points par personne (coalition gagnante)</span>
+      <input type="number" id="pl-points" style="width:110px">
+      <button class="mini" id="pl-save">💾 Enregistrer</button>
+      <span class="calc" id="pl-payday"></span>
     </div>
-    <div class="foot" style="margin-top:12px"><button class="mini" id="cfg-save">💾 Enregistrer les réglages</button></div>
 
     <div class="sec" style="margin-top:22px">Infections récentes</div>
     <div class="card" id="pl-recent"><div class="spin">Chargement…</div></div>
@@ -647,48 +622,32 @@ async function cancelSync(){
   catch(e){ if(cb){cb.disabled=false;cb.textContent='✕ Annuler';} }
 }
 
-/* ── 7. Peste & Choléra (Chaos) ── */
-async function initPlague(){
-  $('#pl-seed').onclick=async()=>{if(!confirm('(Re)semer l\'épidémie ? Réinitialise toutes les infections.'))return;
-    await api('/panel/api/plague','POST',{action:'seed'});toast('Épidémie semée (4 Peste + 4 Choléra)');loadPlague();};
-  $('#pl-payout').onclick=async()=>{const r=await api('/panel/api/plague','POST',{action:'payout'});
-    toast(r.ready?('Payout → groupe '+r.winner+' ('+r.paid+' joueurs)'):'Pas encore : tous les joueurs doivent être infectés',!r.ready);loadPlague();};
-  $('#pl-stackbuff').onclick=async()=>{const r=await api('/panel/api/plague','POST',{action:'stacking_buff'});
-    toast(r.winner?('Buff stacking → '+r.winner):'Aucun stackeur',!r.winner);loadPlague();};
-  $('#cfg-save').onclick=saveChaos;
-  loadPlague();
-}
+/* ── 7. Peste & Choléra ── */
+async function initPlague(){ $('#pl-save').onclick=savePlague; loadPlague(); }
 async function loadPlague(){
-  const {stats,config}=await api('/panel/api/plague');
+  const {stats,points_per_person}=await api('/panel/api/plague');
   if(!stats){$('#pl-title').textContent='Aucune piscine active.';return;}
   $('#pl-inf').textContent=stats.infected;$('#pl-healthy').textContent=stats.healthy;
-  $('#pl-total').textContent=stats.total;$('#pl-leader').textContent=stats.leader||'—';
+  $('#pl-total').textContent=stats.total;
+  $('#pl-leader').textContent=stats.leader?({peste:'🐀 Peste',cholera:'💧 Choléra',égalité:'égalité'}[stats.leader]||stats.leader):'—';
   $('#pl-bar').style.width=stats.pct+'%';
+  $('#pl-peste-n').textContent='· '+stats.peste.count+' inf.';
+  $('#pl-cholera-n').textContent='· '+stats.cholera.count+' inf.';
   const grp=g=>`<div class="stat"><span>Infectés <b>${g.count}</b></span><span>Points <b>${money(g.points)}</b></span></div>
     <div class="calc">Patients zéro : ${g.patient_zero.join(', ')||'—'}</div>`;
   $('#pl-peste').innerHTML=grp(stats.peste);$('#pl-cholera').innerHTML=grp(stats.cholera);
-  $('#pl-payout').disabled=!stats.all_infected;
+  $('#pl-payday').textContent='Boost versé le '+stats.payout_day+' (1 j avant l\'exam final).';
+  if(points_per_person!=null && document.activeElement!==$('#pl-points'))$('#pl-points').value=points_per_person;
   $('#pl-recent').innerHTML=stats.recent.length?stats.recent.map(r=>`<div class="host">
     <span class="hn">${r.login} ${r.zero?'⭐':''}</span>
     <span class="meta"><span class="badge ${r.disease==='peste'?'done':'running'}">${r.disease}</span> ${r.source?('← '+r.source):'patient zéro'}</span></div>`).join('')
-    :'<div class="empty">Personne d\'infecté. Sème l\'épidémie 🦠</div>';
-  if(config){
-    $('#cfg-rank-active').checked=config.rank_mult_active;
-    $('#cfg-rank-first').value=config.rank_mult_first;$('#cfg-rank-last').value=config.rank_mult_last;
-    $('#cfg-stack-active').checked=config.stacking_active;
-    $('#cfg-stack-pct').value=config.stacking_penalty_pct;$('#cfg-stack-buff').value=config.stacking_endgame_buff;
-    $('#cfg-payout').value=config.plague_payout;
-  }
+    :'<div class="empty">Personne d\'infecté (l\'épidémie démarre à la 1re synchro).</div>';
 }
-async function saveChaos(){
-  const b=$('#cfg-save');b.disabled=true;
-  try{
-    await api('/panel/api/plague','POST',{action:'config',
-      rank_mult_active:$('#cfg-rank-active').checked,rank_mult_first:$('#cfg-rank-first').value,rank_mult_last:$('#cfg-rank-last').value,
-      stacking_active:$('#cfg-stack-active').checked,stacking_penalty_pct:$('#cfg-stack-pct').value,stacking_endgame_buff:$('#cfg-stack-buff').value,
-      plague_payout:$('#cfg-payout').value});
-    toast('Réglages enregistrés + scores recalculés');loadPlague();
-  }finally{b.disabled=false;}
+async function savePlague(){
+  const b=$('#pl-save');b.disabled=true;
+  try{await api('/panel/api/plague','POST',{points_per_person:$('#pl-points').value});
+    toast('Points par personne enregistrés + boost recalculé');loadPlague();}
+  finally{b.disabled=false;}
 }
 
 /* init premier onglet */

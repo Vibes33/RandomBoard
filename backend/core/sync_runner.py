@@ -113,6 +113,9 @@ def run_full_sync(*, client, pool, campus, cursus, d_from=None, d_to=None,
     fetch_errors = (FtRateLimit, FtServerError) + NETWORK_ERRORS
     idx, total_events, cancelled = 0, 0, False
 
+    from .chaos import seed_plague
+    seed_plague(pool)  # jour 1 : Peste & Choléra (4+4) tirés une fois, sans reset
+
     for c0 in range(0, total_days, workers):
         if cancel():
             log("Annulation demandée — arrêt du rejeu.")
@@ -153,6 +156,12 @@ def run_full_sync(*, client, pool, campus, cursus, d_from=None, d_to=None,
             prog(day=d, index=idx, total=total_days, events=total_events)
         if cancelled:
             break
+
+    # Boost de fin Peste & Choléra (1 jour avant l'exam final) une fois le rejeu
+    # complet — la coalition la plus nombreuse remporte les points.
+    if not cancelled and d_to >= pool.ends_on - dt.timedelta(days=1):
+        from .chaos import plague_endgame
+        plague_endgame(pool)
 
     return {"d_from": d_from, "d_to": d_to, "total_days": total_days,
             "total_events": total_events, "users": len(users), "cancelled": cancelled}

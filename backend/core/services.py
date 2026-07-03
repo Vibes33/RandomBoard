@@ -130,32 +130,15 @@ def snapshot_day(pool, day):
     )
     fp = _fingerprint(pool, day)
 
-    # Cumul de la veille par user (base du multiplicateur de classement).
-    uids = list(set(day_final) | existing)
-    prevs = {
-        uid: (DailySnapshot.objects.filter(pool=pool, user_id=uid, day__lt=day)
-              .order_by("-day").values_list("cumulative_total", flat=True).first()) or ZERO
-        for uid in uids
-    }
-
-    # Multiplicateur de classement (rubber-band) : appliqué au day_final selon le
-    # RANG DE LA VEILLE (évite la circularité rang↔score). Opt-in via PoolConfig.
-    from .chaos import get_config, _rank_multiplier  # local : casse le cycle d'imports
-    cfg = get_config(pool)
-    prev_rank = {}
-    if cfg.rank_mult_active and len(uids) > 1:
-        order = sorted(uids, key=lambda u: prevs[u], reverse=True)
-        prev_rank = {u: i + 1 for i, u in enumerate(order)}
-
     rows = []
-    for uid in uids:
+    for uid in set(day_final) | existing:
         raw = day_raw.get(uid, ZERO)
         final = day_final.get(uid, ZERO)
-        if prev_rank:
-            m = Decimal(str(_rank_multiplier(prev_rank[uid], len(uids),
-                                             cfg.rank_mult_first, cfg.rank_mult_last)))
-            final = (final * m).quantize(Decimal("0.01"))
-        rows.append((uid, raw, final, prevs[uid] + final))
+        prev = (
+            DailySnapshot.objects.filter(pool=pool, user_id=uid, day__lt=day)
+            .order_by("-day").values_list("cumulative_total", flat=True).first()
+        ) or ZERO
+        rows.append((uid, raw, final, prev + final))
 
     rows.sort(key=lambda t: t[3], reverse=True)  # rang du jour par cumul
     for rank, (uid, raw, final, cum) in enumerate(rows, start=1):

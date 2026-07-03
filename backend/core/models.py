@@ -437,19 +437,16 @@ class SyncRun(models.Model):
 # Chaos absolu (étape 4.2) — config + mécaniques avancées
 # ─────────────────────────────────────────────────────────────
 class PoolConfig(models.Model):
-    """Boutons du chaos par Piscine (tout éditable, effets opt-in)."""
+    """Config par Piscine. Peste & Choléra : seul réglage = points par personne."""
     pool = models.OneToOneField(Pool, on_delete=models.CASCADE, related_name="config")
-    # Multiplicateur de classement (rubber-band : le dernier est le plus boosté)
-    rank_mult_active = models.BooleanField(default=False)
-    rank_mult_first = models.DecimalField(max_digits=6, decimal_places=3, default=Decimal("1.001"))
-    rank_mult_last = models.DecimalField(max_digits=6, decimal_places=3, default=Decimal("1.141"))
-    # Stacking (pénalité si on ne corrige pas + buff final au plus gros stackeur)
+    # Stacking (pénalité si on ne corrige pas + buff final au plus gros stackeur) — opt-in
     stacking_active = models.BooleanField(default=False)
     stacking_penalty_pct = models.DecimalField(max_digits=6, decimal_places=2, default=Decimal("5"))
     stacking_endgame_buff = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal("500"))
-    # Peste & Choléra
+    # Peste & Choléra : boost versé 1 jour avant l'exam final à la coalition la
+    # plus nombreuse — X points PAR PERSONNE (seul réglage).
     plague_seeded = models.BooleanField(default=False)
-    plague_payout = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal("50"))
+    plague_payout = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal("300"))
 
     def __str__(self):
         return f"Config · {self.pool.slug}"
