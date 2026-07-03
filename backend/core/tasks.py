@@ -136,7 +136,15 @@ def daily_derived():
 
 @shared_task
 def poll_42():
-    """Polling périodique de l'API 42 → ingestion via le moteur. No-op sans clés."""
+    """
+    Polling périodique (cron */10) → actualise UNIQUEMENT les données du JOUR
+    COURANT de la piscine active, sans jamais recalculer l'historique :
+      - fetch_live ne récupère que today (logtimes + corrections, en parallèle) ;
+      - sync_all ré-écrit l'agrégat du jour et dédupe → idempotent ;
+      - aucun recompute_from / backfill n'est appelé ici.
+    Les jours passés restent figés (snapshots) ; nightly_snapshot clôt la veille.
+    No-op sans clés API.
+    """
     client = FtClient()
     if not client.configured:
         return {"skipped": "aucune clé API configurée"}

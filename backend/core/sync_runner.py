@@ -13,16 +13,16 @@ optionnels remontent l'avancement :
 """
 import calendar
 import datetime as dt
+from concurrent.futures import ThreadPoolExecutor
 
 from django.conf import settings
-from django.utils import timezone
 from django.utils.text import slugify
 
-from .ft_api import FtRateLimit, FtServerError
+from .ft_api import NETWORK_ERRORS, FtRateLimit, FtServerError
 from .models import Pool
 from .services import snapshot_day
 from .sync import (
-    fetch_campus_users, fetch_locations_range, fetch_scale_teams_range,
+    fetch_campus_users, fetch_day,
     sync_evaluations, sync_feedbacks, sync_flags, sync_locations, sync_users,
 )
 
@@ -81,7 +81,6 @@ def run_full_sync(*, client, pool, campus, cursus, d_from=None, d_to=None,
     log = on_log or (lambda *_: None)
     prog = on_progress or (lambda **_: None)
     cancel = should_cancel or (lambda: False)
-    tz = timezone.get_current_timezone()
 
     # 1) étudiants de la session
     if not skip_users:
@@ -103,35 +102,55 @@ def run_full_sync(*, client, pool, campus, cursus, d_from=None, d_to=None,
     Pool.objects.filter(pk=pool.pk).update(starts_on=d_from, ends_on=d_to, last_day=d_to)
     pool.starts_on, pool.ends_on, pool.last_day = d_from, d_to, d_to
 
-    # 3) rejeu jour par jour
+    # 3) rejeu par CHUNKS de jours : le FETCH (I/O, lent) est parallélisé, mais
+    #    l'INGESTION reste séquentielle et ordonnée pour préserver la somme
+    #    cumulée des snapshots (cumulative(J) = cumulative(J-1) + jour_J).
     total_days = (d_to - d_from).days + 1
-    log(f"Rejeu {d_from} → {d_to} · campus {campus} · {len(users)} étudiants")
-    day, idx, total_events, cancelled = d_from, 0, 0, False
-    fmt = "%Y-%m-%dT%H:%M:%SZ"
-    while day <= d_to:
+    days = [d_from + dt.timedelta(days=i) for i in range(total_days)]
+    workers = max(2, min(8, len(client.keys) * 2))  # calé sur le pool de clés
+    log(f"Rejeu {d_from} → {d_to} · campus {campus} · {len(users)} étudiants "
+        f"· fetch parallèle ×{workers}")
+    fetch_errors = (FtRateLimit, FtServerError) + NETWORK_ERRORS
+    idx, total_events, cancelled = 0, 0, False
+
+    for c0 in range(0, total_days, workers):
         if cancel():
             log("Annulation demandée — arrêt du rejeu.")
             cancelled = True
             break
-        idx += 1
-        start = dt.datetime.combine(day, dt.time.min, tzinfo=tz).astimezone(dt.timezone.utc)
-        end = start + dt.timedelta(days=1)
-        try:
-            s, e = start.strftime(fmt), end.strftime(fmt)
-            locs = fetch_locations_range(client, campus, s, e)
-            scale = fetch_scale_teams_range(client, campus, s, e, cursus_id=cursus)
-            n = (sync_locations(pool, locs, users)
-                 + sync_feedbacks(pool, scale["feedbacks"], users)
-                 + sync_evaluations(pool, scale["evaluations"], users)
-                 + sync_flags(pool, scale["flags"], users))
-            snapshot_day(pool, day)  # fige le jour, comme le cron de minuit
+        chunk = days[c0:c0 + workers]
+        # (a) FETCH parallèle du chunk (chaque jour = 1 thread ; les clés tournent)
+        payloads = {}
+        with ThreadPoolExecutor(max_workers=workers) as pool_ex:
+            futs = {pool_ex.submit(fetch_day, client, campus, d, cursus): d for d in chunk}
+            for fut in futs:
+                d = futs[fut]
+                try:
+                    payloads[d] = fut.result()
+                except fetch_errors as exf:
+                    payloads[d] = exf  # jour en erreur → ignoré à l'ingestion
+        # (b) INGESTION dans l'ordre chronologique
+        for d in chunk:
+            if cancel():
+                cancelled = True
+                break
+            idx += 1
+            p = payloads.get(d)
+            if isinstance(p, Exception):
+                log(f"{d} · API indisponible ({p}) — jour ignoré")
+                prog(day=d, index=idx, total=total_days, events=total_events)
+                continue
+            n = (sync_locations(pool, p["locations"], users)
+                 + sync_feedbacks(pool, p["feedbacks"], users)
+                 + sync_evaluations(pool, p["evaluations"], users)
+                 + sync_flags(pool, p["flags"], users))
+            snapshot_day(pool, d)  # fige le jour, comme le cron de minuit
             total_events += n
-            log(f"{day} · {len(locs)} loc / {len(scale['feedbacks'])} fb / "
-                f"{len(scale['evaluations'])} év → {n} events")
-        except (FtRateLimit, FtServerError) as ex:
-            log(f"{day} · API indisponible ({ex}) — jour ignoré")
-        prog(day=day, index=idx, total=total_days, events=total_events)
-        day += dt.timedelta(days=1)
+            log(f"{d} · {len(p['locations'])} loc / {len(p['feedbacks'])} fb / "
+                f"{len(p['evaluations'])} év → {n} events")
+            prog(day=d, index=idx, total=total_days, events=total_events)
+        if cancelled:
+            break
 
     return {"d_from": d_from, "d_to": d_to, "total_days": total_days,
             "total_events": total_events, "users": len(users), "cancelled": cancelled}

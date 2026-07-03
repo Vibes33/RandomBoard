@@ -16,6 +16,7 @@ Formes normalisées :
 """
 import logging
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, time as dtime, timedelta, timezone as dttz
 
 from django.utils import timezone
@@ -420,17 +421,38 @@ def _day_bounds_utc(day):
     return start.strftime(fmt), end.strftime(fmt)
 
 
+def fetch_day(client, campus_id, day, cursus_id=None, parallel=False):
+    """
+    Récupère TOUTES les données d'un jour, en séparant clairement les deux
+    familles de requêtes :
+      - LOGTIMES (locations) : très lourdes (tout le campus présent) ;
+      - PROJETS/EXAMS (scale_teams) : corrections, feedbacks, flags.
+    parallel=True lance les deux familles en parallèle (2 threads) — utile pour
+    le live (1 seul jour). En rejeu multi-jours on préfère False et on
+    parallélise plutôt AU NIVEAU DES JOURS (voir sync_runner) pour ne pas
+    sur-solliciter le pool de clés.
+    """
+    start, end = _day_bounds_utc(day)
+    if parallel:
+        with ThreadPoolExecutor(max_workers=2) as ex:
+            f_loc = ex.submit(fetch_locations_range, client, campus_id, start, end)
+            f_scale = ex.submit(fetch_scale_teams_range, client, campus_id, start, end,
+                                cursus_id=cursus_id)
+            locations, scale = f_loc.result(), f_scale.result()
+    else:
+        locations = fetch_locations_range(client, campus_id, start, end)
+        scale = fetch_scale_teams_range(client, campus_id, start, end, cursus_id=cursus_id)
+    return {"locations": locations, **scale}
+
+
 def fetch_live(client, campus_id=0, day=None, cursus_id=None):
     """
-    Mode temps réel : récupère les données du JOUR courant (locations + corrections).
-    On refetch le jour entier à chaque poll → le logtime journalier reste exact
-    (agrégat réécrit) et les corrections sont dédupliquées.
+    Mode temps réel : récupère les données du JOUR courant (logtimes + corrections)
+    EN PARALLÈLE. On refetch le jour entier à chaque poll → le logtime journalier
+    reste exact (agrégat réécrit) et les corrections sont dédupliquées.
     """
     day = day or timezone.localdate()
-    start, end = _day_bounds_utc(day)
-    locations = fetch_locations_range(client, campus_id, start, end)
-    scale = fetch_scale_teams_range(client, campus_id, start, end, cursus_id=cursus_id)
-    return {"locations": locations, **scale}
+    return fetch_day(client, campus_id, day, cursus_id=cursus_id, parallel=True)
 
 
 # ─────────────────────────────────────────────────────────────
