@@ -82,10 +82,12 @@ def run_full_sync(*, client, pool, campus, cursus, d_from=None, d_to=None,
     prog = on_progress or (lambda **_: None)
     cancel = should_cancel or (lambda: False)
 
-    # 1) étudiants de la session
+    # 1) étudiants de la session — cohorte filtrée sur l'année/mois de CETTE
+    #    piscine (dérivés de sa date de début), pas sur les valeurs globales.
     if not skip_users:
-        data = fetch_campus_users(client, campus, pool_year=str(settings.FT_POOL_YEAR),
-                                  pool_month=settings.FT_POOL_MONTH)
+        pool_year = str(pool.starts_on.year)
+        pool_month = calendar.month_name[pool.starts_on.month].lower()  # ex: "august"
+        data = fetch_campus_users(client, campus, pool_year=pool_year, pool_month=pool_month)
         res = sync_users(pool, data)
         log(f"Étudiants : {len(data)} ({res['created']} créés, {res['updated']} maj)")
 

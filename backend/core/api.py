@@ -11,6 +11,7 @@ import json
 from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation
 
+from django.conf import settings
 from django.db import transaction
 from django.db.models import Count, Q
 from django.http import HttpResponseBadRequest, JsonResponse
@@ -103,6 +104,7 @@ def api_pools(request):
     pools = [{
         "id": p.id, "name": p.name, "slug": p.slug,
         "starts_on": str(p.starts_on), "ends_on": str(p.ends_on),
+        "campus": p.campus_id, "cursus": p.cursus_id,
         "is_active": p.is_active, "users": p.n_users, "events": events.get(p.id, 0),
     } for p in qs]
     years = sorted({d.year for d in Pool.objects.values_list("starts_on", flat=True)},
@@ -165,6 +167,59 @@ def api_pool_delete(request, pool_id):
     name = pool.name
     pool.delete()
     return JsonResponse({"ok": True, "deleted": name})
+
+
+@staff_required
+@require_http_methods(["POST"])
+def api_pool_create(request):
+    """
+    Crée une piscine custom à tracker : nom + campus_id + cursus_id + dates.
+    Elle est créée INACTIVE et apparaît aussitôt dans le sélecteur Workspace.
+    """
+    from django.utils.text import slugify
+    data = _json(request)
+    name = (data.get("name") or "").strip()
+    if not name:
+        return HttpResponseBadRequest("Nom requis.")
+    try:
+        campus = int(data.get("campus_id"))
+        cursus = int(data.get("cursus_id"))
+        d_from = date.fromisoformat(data.get("date_from", ""))
+        d_to = date.fromisoformat(data.get("date_to", ""))
+    except (TypeError, ValueError):
+        return HttpResponseBadRequest("Campus/Cursus (entiers) et dates (AAAA-MM-JJ) requis.")
+    if d_to < d_from:
+        return HttpResponseBadRequest("La date de fin est avant la date de début.")
+    slug = slugify(name)[:50]
+    if not slug or Pool.objects.filter(slug=slug).exists():
+        return HttpResponseBadRequest("Nom invalide ou déjà utilisé.")
+    pool = Pool.objects.create(
+        name=name, slug=slug, starts_on=d_from, ends_on=d_to, last_day=d_to,
+        campus_id=campus, cursus_id=cursus, is_active=False)
+    return JsonResponse({"ok": True, "id": pool.id, "name": pool.name})
+
+
+@staff_required
+@require_http_methods(["POST"])
+def api_pool_fetch(request, pool_id):
+    """
+    Lance le FETCH INITIAL d'une piscine en se basant EXCLUSIVEMENT sur ses
+    propres campus_id / cursus_id / dates (aucune valeur globale de settings).
+    """
+    pool = Pool.objects.filter(id=pool_id).first()
+    if not pool:
+        return HttpResponseBadRequest("Piscine introuvable.")
+    if not (pool.campus_id or settings.FT_CAMPUS_ID):
+        return HttpResponseBadRequest("Campus ID manquant sur la piscine.")
+    if SyncRun.objects.filter(
+            status__in=[SyncRun.Status.PENDING, SyncRun.Status.RUNNING]).exists():
+        return HttpResponseBadRequest("Une synchronisation est déjà en cours.")
+    run = SyncRun.objects.create(
+        pool=pool, date_from=pool.starts_on, date_to=pool.ends_on,
+        created_by=request.user if request.user.is_authenticated else None)
+    from .tasks import run_sync
+    run_sync.delay(run.id)
+    return JsonResponse({"ok": True, "id": run.id, "pool": pool.name})
 
 
 @staff_required

@@ -41,15 +41,19 @@ def run_sync(sync_run_id):
         client = FtClient()
         if not client.configured:
             raise RuntimeError("Aucune clé API configurée (voir .env / ft_doctor).")
-        campus, cursus = resolve_target()
-        if not campus:
-            raise RuntimeError("FT_CAMPUS_ID non défini.")
 
         pool = run.pool
         if pool is None:
+            campus, _ = resolve_target()
             pool, _ = get_or_create_pool(campus)
             run.pool = pool
-        run.append_log(f"Piscine cible : {pool.name}")
+        # Cible : les IDs PROPRES à la piscine priment sur les valeurs globales.
+        settings_campus, settings_cursus = resolve_target()
+        campus = pool.campus_id or settings_campus
+        cursus = pool.cursus_id or settings_cursus
+        if not campus:
+            raise RuntimeError("Campus non défini (ni sur la piscine, ni dans settings).")
+        run.append_log(f"Piscine cible : {pool.name} · campus {campus} · cursus {cursus}")
         run.save()
 
         def on_log(line):

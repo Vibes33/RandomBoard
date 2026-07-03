@@ -149,7 +149,22 @@
   </div>
 
   <section class="pane on" id="p-pools">
-    <div class="sec">Choisis la piscine active — le panel entier opère dessus</div>
+    <div class="sec">Créer une Piscine à Tracker</div>
+    <div class="card" style="padding:16px;margin-bottom:16px">
+      <div class="bar" style="margin:0">
+        <input id="np-name" placeholder="Nom (ex: Piscine Août Paris)" style="width:210px">
+        <input id="np-campus" type="number" placeholder="Campus ID" style="width:110px">
+        <input id="np-cursus" type="number" placeholder="Cursus ID" style="width:110px">
+        <label class="calc" style="display:flex;align-items:center;gap:6px">Début
+          <input id="np-from" type="date"></label>
+        <label class="calc" style="display:flex;align-items:center;gap:6px">Fin
+          <input id="np-to" type="date"></label>
+        <button class="mini" id="np-create">➕ Créer</button>
+      </div>
+      <div class="calc" style="margin-top:8px">Le fetch utilisera EXCLUSIVEMENT ces campus/cursus/dates.</div>
+    </div>
+
+    <div class="sec">Workspace — choisis la piscine active (le panel opère dessus)</div>
     <div class="bar">
       <span class="sec" style="margin:0">Filtrer</span>
       <input id="pool-q" placeholder="Rechercher par nom…" style="width:210px">
@@ -162,9 +177,9 @@
       <button class="mini" id="pool-discover">🔍 Découvrir depuis l'API 42</button>
     </div>
     <div class="card"><table><thead><tr>
-      <th>Piscine</th><th>Période</th><th class="num">Users</th><th class="num">Events</th>
-      <th>Statut</th><th style="width:140px">Action</th>
-    </tr></thead><tbody id="pools-tb"><tr><td colspan="6" class="spin">Chargement…</td></tr></tbody></table></div>
+      <th>Piscine</th><th>Période</th><th>Cible</th><th class="num">Users</th><th class="num">Events</th>
+      <th>Statut</th><th style="width:230px">Action</th>
+    </tr></thead><tbody id="pools-tb"><tr><td colspan="7" class="spin">Chargement…</td></tr></tbody></table></div>
   </section>
 
   <section class="pane" id="p-users">
@@ -332,6 +347,7 @@ async function initPools(){
   $('#pool-year').onchange=loadPools;
   $('#pool-refresh').onclick=loadPools;
   $('#pool-discover').onclick=discoverPools;
+  $('#np-create').onclick=createPool;
   $('#pool-q').addEventListener('keydown',e=>{if(e.key==='Enter')loadPools();});
   renderPools(d.pools);
 }
@@ -358,16 +374,32 @@ function renderPools(pools){
   $('#pools-tb').innerHTML=pools.length?pools.map(p=>`<tr>
     <td><b>${p.name}</b><div style="font-size:11px;color:var(--faint)">${p.slug}</div></td>
     <td class="meta">${p.starts_on} → ${p.ends_on}</td>
+    <td class="meta">${p.campus?('campus '+p.campus):'—'}${p.cursus?(' · cursus '+p.cursus):''}</td>
     <td class="num">${p.users}</td><td class="num">${p.events}</td>
     <td>${p.is_active?'<span class="chip gain">● active</span>':'<span style="color:var(--faint)">—</span>'}</td>
-    <td>${p.is_active
-       ?'<span style="font-size:12px;color:var(--muted)">piscine active</span>'
-       :`<button class="mini" data-act="${p.id}">Définir active</button>`
-         +(p.events===0?` <button class="mini danger" data-del="${p.id}" title="Supprimer (piscine vide)">🗑</button>`:'')}</td>
+    <td>${p.is_active?'<span style="font-size:12px;color:var(--muted)">active</span>'
+        :`<button class="mini ghost" data-act="${p.id}">Activer</button>`}
+      <button class="mini" data-fetch="${p.id}" title="Fetch initial (campus/cursus/dates de la piscine)">🚀 Fetch initial</button>${p.events===0&&!p.is_active?` <button class="mini danger" data-del="${p.id}" title="Supprimer (piscine vide)">🗑</button>`:''}</td>
   </tr>`).join('')
-  :'<tr><td colspan="6" class="empty">Aucune piscine. Clique « Découvrir depuis l\'API 42 ».</td></tr>';
+  :'<tr><td colspan="7" class="empty">Aucune piscine. Crée-en une ci-dessus ou « Découvrir depuis l\'API 42 ».</td></tr>';
   $('#pools-tb').querySelectorAll('[data-act]').forEach(b=>b.onclick=()=>activatePool(b.dataset.act));
   $('#pools-tb').querySelectorAll('[data-del]').forEach(b=>b.onclick=()=>deletePool(b.dataset.del));
+  $('#pools-tb').querySelectorAll('[data-fetch]').forEach(b=>b.onclick=()=>fetchPool(b.dataset.fetch,b));
+}
+async function createPool(){
+  const body={name:$('#np-name').value,campus_id:$('#np-campus').value,cursus_id:$('#np-cursus').value,
+    date_from:$('#np-from').value,date_to:$('#np-to').value};
+  const r=await api('/panel/api/pools/create','POST',body);
+  toast('Piscine créée : '+r.name);
+  ['#np-name','#np-campus','#np-cursus','#np-from','#np-to'].forEach(s=>$(s).value='');
+  loadPools();
+}
+async function fetchPool(id,btn){
+  if(!confirm('Lancer le fetch initial de cette piscine (ses campus/cursus/dates) ?'))return;
+  btn.disabled=true;const t=btn.textContent;btn.textContent='⏳…';
+  try{const r=await api('/panel/api/pools/'+id+'/fetch','POST',{});
+    toast('Fetch lancé → suis l\'avancement dans l\'onglet Synchronisation');}
+  finally{btn.disabled=false;btn.textContent=t;}
 }
 async function deletePool(id){
   if(!confirm('Supprimer cette piscine vide ?'))return;

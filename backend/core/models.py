@@ -27,6 +27,10 @@ class Pool(models.Model):
     last_day = models.DateField(
         help_text="Dernier jour : déclenche le multiplicateur extrême sur les corrections."
     )
+    # Cible API 42 propre à CETTE piscine (utilisée telle quelle par le fetch,
+    # sans retomber sur les valeurs globales de settings).
+    campus_id = models.IntegerField(null=True, blank=True)
+    cursus_id = models.IntegerField(null=True, blank=True)
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
