@@ -49,14 +49,24 @@ def _dec(value):
 
 
 def _rule_cards(pool=None):
-    """Sérialise les règles (base range + multiplier range) pour les onglets Points/Jour."""
+    """
+    Sérialise les règles ACTIVES pour les onglets Points/Jour : pour chaque règle,
+    la liste de ses champs éditables (schéma central RULE_FIELDS) avec leur valeur
+    courante, plus son range de multiplicateur. Rend tous les points éditables.
+    """
+    from .rules_config import RULE_FIELDS
     cards = []
     for r in Rule.objects.filter(is_active=True).order_by("category", "label"):
-        p = r.current_version.params if r.current_version else {}
+        p = (r.current_version.params if r.current_version else {}) or {}
+        fields = []
+        for spec in RULE_FIELDS.get(r.key, []):
+            val = p.get(spec["name"])
+            if spec["kind"] == "map":
+                val = dict(val or {})
+            fields.append({**spec, "value": val})
         cards.append({
             "id": r.id, "key": r.key, "label": r.label, "category": r.category,
-            "computed": p.get("type") not in ("fixed", None),
-            "base_min": p.get("min"), "base_max": p.get("max"),
+            "fields": fields,
             "mult_min": float(r.mult_min), "mult_max": float(r.mult_max),
         })
     return cards
@@ -235,25 +245,43 @@ def api_logs(request):
 @staff_required
 @require_http_methods(["GET", "POST"])
 def api_points(request):
+    from .rules_config import RULE_FIELDS
     if request.method == "GET":
         return JsonResponse({"rules": _rule_cards()})
 
     data = _json(request)
-    rule = Rule.objects.filter(id=data.get("id")).first()
+    rule = Rule.objects.filter(id=data.get("id"), is_active=True).first()
     if not rule:
         return HttpResponseBadRequest("Règle introuvable.")
+
+    # 1) range du multiplicateur journalier (porté par la règle)
     try:
         rule.mult_min = _dec(data.get("mult_min", rule.mult_min))
         rule.mult_max = _dec(data.get("mult_max", rule.mult_max))
-    except InvalidOperation:
+    except (InvalidOperation, TypeError):
         return HttpResponseBadRequest("Range de multiplicateur invalide.")
     rule.save(update_fields=["mult_min", "mult_max"])
 
-    if data.get("base_min") not in (None, "") and data.get("base_max") not in (None, ""):
+    # 2) points de base : on écrit UNIQUEMENT les champs déclarés au schéma, dans
+    #    une nouvelle RuleVersion (le passé figé n'est pas touché).
+    specs = {s["name"]: s for s in RULE_FIELDS.get(rule.key, [])}
+    incoming = data.get("fields") or {}
+    if incoming:
         cur = rule.current_version
-        params = dict(cur.params) if cur else {"type": "fixed"}
-        params["min"], params["max"] = float(data["base_min"]), float(data["base_max"])
-        params.pop("points", None)
+        params = dict(cur.params) if cur else {}
+        try:
+            for name, val in incoming.items():
+                spec = specs.get(name)
+                if not spec:
+                    continue  # champ inconnu → ignoré (sécurité)
+                if spec["kind"] == "map":
+                    params[name] = {str(k): float(v) for k, v in (val or {}).items()}
+                elif spec["kind"] == "time":
+                    params[name] = str(val)
+                else:
+                    params[name] = float(val)
+        except (TypeError, ValueError):
+            return HttpResponseBadRequest("Valeur de paramètre invalide.")
         new_rule_version(rule, params, user=request.user)
     return JsonResponse({"ok": True})
 

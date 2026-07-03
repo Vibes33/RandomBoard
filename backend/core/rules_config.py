@@ -90,3 +90,66 @@ RULES = [
     ("project_random", "event", "Projet évalué (points random ±, au pif)",
      {"type": "random_modifier", "base": 0, "rand_min": -50, "rand_max": 80}),
 ]
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Règles DÉSACTIVÉES : jamais déclenchées / doublons / porte-config obsolètes.
+# Marquées is_active=False (historique conservé, invisibles dans le panel).
+# ─────────────────────────────────────────────────────────────────────
+INACTIVE_RULES = {
+    "kw_quoi_feur", "kw_quoi_sans_feur",   # doublons de feedback_keywords
+    "curl_leaderboard",                    # aucun point attribué
+    "randominette", "exam_time", "last_day_corrections",  # jamais émises
+    "config_weekend", "config_daily",      # porte-config de l'ancien modèle
+}
+
+
+# ─────────────────────────────────────────────────────────────────────
+# SCHÉMA D'ÉDITION : pour chaque règle active, les paramètres modifiables
+# depuis le panel. Source unique qui rend les « points de base » éditables
+# pour TOUTES les règles (plus seulement les fixed). kind ∈
+#   points | value (seuil) | proba | time (HH:MM) | map (table clé→points)
+# ─────────────────────────────────────────────────────────────────────
+def _f(name, label, kind="points"):
+    return {"name": name, "label": label, "kind": kind}
+
+
+RULE_FIELDS = {
+    "logtime_low": [_f("max_points", "Points si logtime minimal"),
+                    _f("min_points", "Points si logtime maximal"),
+                    _f("min", "Minutes — borne basse", "value"),
+                    _f("max", "Minutes — borne haute", "value")],
+    "bsq_eval": [_f("base", "Points de base"),
+                 _f("rand_min", "Aléa min"), _f("rand_max", "Aléa max")],
+    "bsq_duration": [_f("lo", "Durée min (minutes)", "value"),
+                     _f("hi", "Durée max (minutes)", "value"),
+                     _f("in_points", "Points si dans la fenêtre"),
+                     _f("out_points", "Points si hors fenêtre")],
+    "midnight_bonus": [_f("points", "Points du bonus"),
+                       _f("start", "Début (HH:MM)", "time"),
+                       _f("end", "Fin (HH:MM)", "time")],
+    "logtime_high": [_f("min", "Minutes — borne basse", "value"),
+                     _f("max", "Minutes — borne haute", "value"),
+                     _f("max_malus", "Malus maximal")],
+    "reconnect_same_pc": [_f("min", "Malus min"), _f("max", "Malus max")],
+    "aura_first_coalition": [_f("min", "Malus min"), _f("max", "Malus max")],
+    "shiny_host": [_f("min", "Bonus min"), _f("max", "Bonus max")],
+    "cursed_host": [_f("min", "Malus min"), _f("max", "Malus max")],
+    "binome_cursed": [_f("points", "Points (Maudit)")],
+    "binome_blessed": [_f("points", "Points (Béni)")],
+    "seniority_malus": [_f("min", "Semaines — borne basse", "value"),
+                        _f("max", "Semaines — borne haute", "value"),
+                        _f("max_malus", "Malus maximal")],
+    "feedback_keywords": [_f("map", "Mots-clés → points", "map"),
+                          _f("quoi_alone_points", "« quoi » seul"),
+                          _f("coubeh_points", "« coubeh »")],
+    "shell_malus": [_f("min", "Malus min"), _f("max", "Malus max")],
+    "rush_malus": [_f("lo", "Note min", "value"), _f("hi", "Note max", "value"),
+                   _f("in_points", "Points si note dans [min,max]"),
+                   _f("out_points", "Points si hors (ex: note 0)")],
+    "correction_flag": [_f("map", "Flag → points", "map"),
+                        _f("default", "Points par défaut")],
+    "project_random": [_f("base", "Points de base"),
+                       _f("rand_min", "Aléa min"), _f("rand_max", "Aléa max")],
+    "manual_adjust": [],  # points fournis à la main au moment de l'ajustement
+}

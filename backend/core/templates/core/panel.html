@@ -79,6 +79,10 @@
   .box .foot{display:flex;align-items:center;gap:8px;margin-top:12px}
   .ok{color:var(--green);font-size:12px;opacity:0;transition:opacity .3s}.ok.show{opacity:1}
   .calc{font-size:12px;color:var(--faint);font-style:italic}
+  .mapf{margin:6px 0 12px}
+  .maplbl{font-size:12px;color:var(--muted);display:block;margin-bottom:6px}
+  .maprow{display:flex;gap:8px;align-items:center;margin-bottom:6px}
+  .mapadd{gap:8px;margin-top:4px}
 
   .cols{display:grid;grid-template-columns:1fr 1fr;gap:16px}
   @media(max-width:920px){.cols{grid-template-columns:1fr}}
@@ -366,30 +370,60 @@ function renderLogs(logs){
     :'<tr><td colspan="6" class="empty">Aucun log.</td></tr>';
 }
 
-/* ── 3. Options de Points (Bento) ── */
+/* ── 3. Options de Points (schéma dynamique : tous les points éditables) ── */
+const esc=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
 async function loadPoints(){
   const {rules}=await api('/panel/api/points');
-  $('#points-b').innerHTML=rules.map(r=>`<div class="box">
+  const b=$('#points-b');
+  b.innerHTML=rules.length?rules.map(r=>`<div class="box">
     <div class="title">${r.label}</div><div class="key">${r.key} ${chip(r.category)}</div>
-    <div class="row-in"><label>Points base</label>
-      ${r.computed
-        ? '<span class="calc">calculé (règle spéciale)</span>'
-        : `<input type="number" id="bmin-${r.id}" value="${r.base_min??''}" placeholder="min">
-           <span class="arrow">→</span>
-           <input type="number" id="bmax-${r.id}" value="${r.base_max??''}" placeholder="max">`}</div>
+    ${r.fields.map(f=>renderField(f)).join('')||'<div class="calc">Points fournis à la volée (rien à régler ici).</div>'}
     <div class="row-in"><label>Range multiplic.</label>
       <input type="number" step="0.1" id="mmin-${r.id}" value="${r.mult_min}">
       <span class="arrow">→</span>
       <input type="number" step="0.1" id="mmax-${r.id}" value="${r.mult_max}"></div>
-    <div class="foot"><button class="mini" data-save="${r.id}" data-calc="${r.computed}">💾 Sauvegarder</button>
+    <div class="foot"><button class="mini" data-save="${r.id}">💾 Sauvegarder</button>
       <span class="ok" id="ok-${r.id}">✓ enregistré</span></div>
-  </div>`).join('');
-  $('#points-b').querySelectorAll('[data-save]').forEach(b=>b.onclick=()=>savePoints(b.dataset.save,b.dataset.calc==='true'));
+  </div>`).join(''):'<div class="empty">Aucune règle active.</div>';
+  b.onclick=onPointsClick;
 }
-async function savePoints(id,computed){
-  const body={id,mult_min:$('#mmin-'+id).value,mult_max:$('#mmax-'+id).value};
-  if(!computed){body.base_min=$('#bmin-'+id).value;body.base_max=$('#bmax-'+id).value;}
-  await api('/panel/api/points','POST',body);
+function renderField(f){
+  if(f.kind==='map'){
+    const rows=Object.entries(f.value||{}).map(([k,v])=>mapRowHtml(k,v)).join('');
+    return `<div class="mapf" data-map="${f.name}"><label class="maplbl">${f.label}</label>
+      <div class="maprows">${rows}</div>
+      <div class="row-in mapadd"><input placeholder="clé" class="nk" style="flex:1;min-width:80px">
+        <input type="number" placeholder="pts" class="nv" style="width:74px">
+        <button class="mini ghost" data-mapadd>+ ajouter</button></div></div>`;
+  }
+  const isNum=f.kind!=='time';
+  return `<div class="row-in"><label>${f.label}</label>
+    <input type="${isNum?'number':'text'}" ${isNum?'step="0.01"':''} data-f="${f.name}" value="${f.value??''}"></div>`;
+}
+function mapRowHtml(k,v){
+  return `<div class="maprow"><input class="mk" value="${esc(k)}" style="flex:1;min-width:80px">
+    <input class="mv" type="number" value="${v}" style="width:74px">
+    <button class="mini ghost" data-delrow>×</button></div>`;
+}
+function onPointsClick(e){
+  const save=e.target.closest('[data-save]'); if(save){savePoints(save.closest('.box'),save.dataset.save);return;}
+  const add=e.target.closest('[data-mapadd]');
+  if(add){const mf=add.closest('.mapf'),nk=mf.querySelector('.nk'),nv=mf.querySelector('.nv');
+    if(!nk.value.trim())return;
+    mf.querySelector('.maprows').insertAdjacentHTML('beforeend',mapRowHtml(nk.value.trim(),nv.value||0));
+    nk.value='';nv.value='';return;}
+  const del=e.target.closest('[data-delrow]'); if(del){del.closest('.maprow').remove();}
+}
+async function savePoints(box,id){
+  const fields={};
+  box.querySelectorAll('[data-f]').forEach(inp=>{ if(inp.value!=='')fields[inp.dataset.f]=inp.value; });
+  box.querySelectorAll('.mapf').forEach(mf=>{
+    const m={}; mf.querySelectorAll('.maprow').forEach(row=>{
+      const k=row.querySelector('.mk').value.trim();
+      if(k)m[k]=parseFloat(row.querySelector('.mv').value)||0;
+    }); fields[mf.dataset.map]=m;
+  });
+  await api('/panel/api/points','POST',{id,mult_min:$('#mmin-'+id).value,mult_max:$('#mmax-'+id).value,fields});
   const ok=$('#ok-'+id);ok.classList.add('show');setTimeout(()=>ok.classList.remove('show'),1600);
   toast('Règle enregistrée');
 }
