@@ -442,10 +442,11 @@ async function initSync(){
   await Promise.all([refreshSync(),loadAuto()]);
 }
 const fmtDur=s=>s<60?s+'s':Math.floor(s/60)+' min '+(s%60)+'s';
+let autoTimer=null, autoNextAt=null, autoRefreshing=false;
 async function loadAuto(){
   const d=await api('/panel/api/autosync');
   const t=$('#auto-toggle');
-  if(!d.exists){$('#auto-info').textContent='Beat pas encore initialisé — réessaie dans un instant.';t.disabled=true;return;}
+  if(!d.exists){$('#auto-info').textContent='Beat pas encore initialisé — réessaie dans un instant.';t.disabled=true;stopAutoTimer();$('#auto-next').textContent='—';return;}
   t.disabled=false; t.checked=d.enabled;
   t.onchange=async()=>{
     const r=await api('/panel/api/autosync','POST',{enabled:t.checked});
@@ -453,8 +454,19 @@ async function loadAuto(){
   };
   $('#auto-info').innerHTML=`Interroge l'API 42 <b>${d.interval_label}</b> · piscine active <b>${d.pool||'—'}</b>.`
     +` <span style="color:var(--faint)">(ne poll que pendant la période de la piscine)</span>`;
-  $('#auto-next').textContent=d.enabled?(d.next_in!=null?'~ '+fmtDur(d.next_in):'—'):'désactivée';
   $('#auto-last').textContent=(d.last_run?('dernier : '+d.last_run):'jamais exécutée')+` · ${d.total_runs} run(s)`;
+  if(d.enabled && d.next_in!=null){ autoNextAt=Date.now()+d.next_in*1000; startAutoTimer(); }
+  else { stopAutoTimer(); autoNextAt=null; $('#auto-next').textContent=d.enabled?'—':'désactivée'; }
+}
+function startAutoTimer(){ stopAutoTimer(); tickAuto(); autoTimer=setInterval(tickAuto,1000); }
+function stopAutoTimer(){ if(autoTimer){clearInterval(autoTimer);autoTimer=null;} }
+function tickAuto(){
+  if(autoNextAt==null)return;
+  const rem=Math.round((autoNextAt-Date.now())/1000);
+  if(rem>0){ $('#auto-next').textContent='~ '+fmtDur(rem); return; }
+  // Créneau atteint : on laisse Beat déclencher puis on resynchronise avec le serveur.
+  $('#auto-next').textContent='imminent…'; stopAutoTimer();
+  if(!autoRefreshing){ autoRefreshing=true; setTimeout(async()=>{ try{await loadAuto();}finally{autoRefreshing=false;} },4000); }
 }
 async function startSync(){
   const body={};
