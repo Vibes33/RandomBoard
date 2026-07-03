@@ -21,6 +21,7 @@ urlpatterns = [
     path("panel/api/logs", api.api_logs),
     path("panel/api/points", api.api_points),
     path("panel/api/days", api.api_days),
+    path("panel/api/randomize-all", api.api_randomize_all),
     path("panel/api/hosts", api.api_hosts),
     path("panel/api/sync", api.api_sync),
     path("panel/api/sync/status", api.api_sync_status),

@@ -117,20 +117,29 @@ def weekly_designations():
 
 @shared_task
 def daily_derived():
-    """Calculs dérivés du jour : coef aléatoire + week-end, ancienneté, aura."""
-    from .derived import (
-        apply_aura_penalty, apply_seniority, ensure_weekend_coefficients,
-        randomize_daily_coefficient, randomize_daily_hosts,
-    )
+    """
+    Tirages AUTOMATIQUES du jour (cron 00:06) pour la piscine active, dans sa
+    période uniquement (évite de polluer un pool de test) :
+      - multiplicateurs par event (DailyEventMultiplier, only_missing = respecte
+        un réglage manuel),
+      - places Bénites/Maudites du jour,
+      puis ancienneté & aura.
+    """
+    from .derived import apply_aura_penalty, apply_seniority, randomize_daily_hosts
+    from .services import randomize_day_multipliers
+    today = timezone.localdate()
     out = {}
     for pool in Pool.objects.filter(is_active=True):
-        coef = randomize_daily_coefficient(pool)   # random du jour courant
-        ensure_weekend_coefficients(pool)          # écrase si le jour est un week-end
-        hosts = randomize_daily_hosts(pool)        # 5 Bénites + 5 Maudites du jour
+        if not (pool.starts_on <= today <= pool.ends_on):
+            out[pool.slug] = "hors période — ignoré"
+            continue
+        mults = randomize_day_multipliers(pool, today, reseed=True, only_missing=True)
+        hosts = randomize_daily_hosts(pool, today)
         weeks, _ = apply_seniority(pool)
         auras = apply_aura_penalty(pool)
-        out[pool.slug] = {"coef": str(coef), "weeks": weeks,
-                          "hosts": len(hosts["shiny"]) + len(hosts["cursed"]), "auras": auras}
+        out[pool.slug] = {"multiplicateurs": mults,
+                          "places": len(hosts["shiny"]) + len(hosts["cursed"]),
+                          "semaines": weeks, "auras": auras}
     return out
 
 

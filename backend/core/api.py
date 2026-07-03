@@ -334,6 +334,24 @@ def api_days(request):
     return JsonResponse({"ok": True})
 
 
+@staff_required
+@require_http_methods(["POST"])
+def api_randomize_all(request):
+    """Randomise multiplicateurs + places Bénites/Maudites pour TOUS les jours de
+    la piscine active, puis recalcule les scores de bout en bout."""
+    pool = _pool()
+    if not pool:
+        return HttpResponseBadRequest("Aucune piscine active.")
+    day, days = pool.starts_on, 0
+    while day <= pool.ends_on:
+        randomize_day_multipliers(pool, day, reseed=True)
+        randomize_daily_hosts(pool, day, reseed=True)
+        day += timedelta(days=1)
+        days += 1
+    recompute_from(pool, pool.starts_on)
+    return JsonResponse({"ok": True, "days": days})
+
+
 # ─────────────────────── 5. Places & Hosts (5 Bénites + 5 Maudites / jour) ───────────────────────
 @staff_required
 @require_http_methods(["GET", "POST"])

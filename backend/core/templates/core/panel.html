@@ -190,7 +190,8 @@
     <div class="bar">
       <span class="sec" style="margin:0">Jour</span>
       <select id="day-pick"></select>
-      <button class="mini" id="rand-all">🎲 Randomize tout le jour</button>
+      <button class="mini" id="rand-all">🎲 Randomize ce jour</button>
+      <button class="mini" id="rand-alldays">🎲 Randomiser TOUS les jours</button>
       <span class="calc">Un seul multiplicateur par event. Chaque modif recalcule les scores.</span>
     </div>
     <div class="bento" id="days-b"><div class="empty">Sélectionne un jour…</div></div>
@@ -434,6 +435,12 @@ async function initDays(){
   $('#day-pick').innerHTML=d.days.map(x=>`<option>${x}</option>`).join('');
   $('#day-pick').onchange=loadDay;
   $('#rand-all').onclick=async()=>{await api('/panel/api/days','POST',{date:$('#day-pick').value,action:'randomize'});toast('Jour re-randomisé + scores recalculés');loadDay();};
+  $('#rand-alldays').onclick=async()=>{
+    if(!confirm('Randomiser multiplicateurs + places pour TOUS les jours de la piscine ?'))return;
+    const b=$('#rand-alldays'); b.disabled=true; const t=b.textContent; b.textContent='⏳ En cours…';
+    try{const r=await api('/panel/api/randomize-all','POST',{});toast(`${r.days} jours randomisés + scores recalculés`);loadDay();}
+    finally{b.disabled=false;b.textContent=t;}
+  };
   if(d.days.length)loadDay();
 }
 async function loadDay(){
