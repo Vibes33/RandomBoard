@@ -18,7 +18,7 @@ from django.conf import settings
 from django.utils import timezone
 from django.utils.text import slugify
 
-from .ft_api import FtRateLimit
+from .ft_api import FtRateLimit, FtServerError
 from .models import Pool
 from .services import snapshot_day
 from .sync import (
@@ -128,8 +128,8 @@ def run_full_sync(*, client, pool, campus, cursus, d_from=None, d_to=None,
             total_events += n
             log(f"{day} · {len(locs)} loc / {len(scale['feedbacks'])} fb / "
                 f"{len(scale['evaluations'])} év → {n} events")
-        except FtRateLimit as ex:
-            log(f"{day} · rate-limit ({ex}) — jour ignoré")
+        except (FtRateLimit, FtServerError) as ex:
+            log(f"{day} · API indisponible ({ex}) — jour ignoré")
         prog(day=day, index=idx, total=total_days, events=total_events)
         day += dt.timedelta(days=1)
 

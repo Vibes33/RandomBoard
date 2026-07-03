@@ -17,12 +17,21 @@ import time
 import requests
 from django.conf import settings
 
+# Erreurs réseau transitoires : on retente en tournant sur les clés, on n'abandonne pas.
+NETWORK_ERRORS = (requests.exceptions.Timeout, requests.exceptions.ConnectionError,
+                  requests.exceptions.ChunkedEncodingError)
+
 
 class FtAuthError(Exception):
     pass
 
 
 class FtRateLimit(Exception):
+    pass
+
+
+class FtServerError(Exception):
+    """Erreur 5xx transitoire côté API 42 — retentable."""
     pass
 
 
@@ -40,8 +49,12 @@ class _Key:
 
 
 class FtClient:
-    MIN_INTERVAL = 0.5   # s entre 2 appels d'une même clé (~2 req/s)
-    MAX_WAIT = 30.0      # si toutes les clés sont en pause plus longtemps → on abandonne
+    MIN_INTERVAL = 0.5      # s entre 2 appels d'une même clé (~2 req/s)
+    MAX_WAIT = 45.0         # si toutes les clés sont en pause plus longtemps → on abandonne
+    CONNECT_TIMEOUT = 10.0  # s pour établir la connexion
+    READ_TIMEOUT = 30.0     # s pour lire la réponse (l'API 42 peut être lente)
+    TOKEN_TIMEOUT = 20.0    # s pour l'échange OAuth
+    BACKOFF_CAP = 20.0      # plafond du backoff exponentiel sur erreur réseau/5xx
 
     def __init__(self, credentials=None, base=None):
         creds = credentials if credentials is not None else settings.FT_API_CREDENTIALS
@@ -49,6 +62,11 @@ class FtClient:
         self.base = (base or settings.FT_API_BASE).rstrip("/")
         self._i = 0
         self._lock = threading.Lock()
+
+    @staticmethod
+    def _backoff(attempt):
+        """Backoff exponentiel borné : 1, 2, 4, 8… plafonné à BACKOFF_CAP."""
+        return min(2.0 ** attempt, FtClient.BACKOFF_CAP)
 
     @property
     def configured(self):
@@ -80,7 +98,7 @@ class FtClient:
             f"{self.base}/oauth/token",
             data={"grant_type": "client_credentials",
                   "client_id": key.uid, "client_secret": key.secret},
-            timeout=15,
+            timeout=(self.CONNECT_TIMEOUT, self.TOKEN_TIMEOUT),
         )
         if r.status_code != 200:
             key.available_at = time.time() + 300  # clé invalide → pause 5 min
@@ -90,20 +108,35 @@ class FtClient:
         key.token_exp = time.time() + int(d.get("expires_in", 7200)) - 60
         return key.token
 
-    # ─── requête avec rotation ───
+    # ─── requête avec rotation + résilience réseau ───
     def get(self, endpoint, params=None, retries=None):
         url = endpoint if endpoint.startswith("http") else f"{self.base}{endpoint}"
-        retries = retries if retries is not None else max(3, len(self.keys) * 2)
+        # Budget large : on veut survivre aux 429/timeouts, pas abandonner au 1er.
+        retries = retries if retries is not None else max(6, len(self.keys) * 3)
         last_err = None
-        for _ in range(retries):
+        for attempt in range(retries):
             key = self._pick_key()
             try:
                 token = self._token(key)
             except FtAuthError as e:
                 last_err = e
                 continue
-            r = requests.get(url, headers={"Authorization": f"Bearer {token}"},
-                             params=params, timeout=20)
+            except NETWORK_ERRORS as e:
+                # OAuth injoignable → petite pause sur cette clé, on tourne.
+                last_err = e
+                key.available_at = time.time() + self._backoff(attempt)
+                continue
+
+            try:
+                r = requests.get(url, headers={"Authorization": f"Bearer {token}"},
+                                 params=params,
+                                 timeout=(self.CONNECT_TIMEOUT, self.READ_TIMEOUT))
+            except NETWORK_ERRORS as e:
+                # Timeout / coupure réseau → on retente (autre clé) avec backoff.
+                last_err = e
+                key.available_at = time.time() + self._backoff(attempt)
+                continue
+
             key.available_at = time.time() + self.MIN_INTERVAL  # throttle ~2 req/s
             if r.status_code == 401:
                 key.token = None  # token périmé → on refresh au prochain tour
@@ -113,19 +146,37 @@ class FtClient:
                 key.available_at = time.time() + retry_after  # cette clé se repose
                 last_err = FtRateLimit(f"429 sur {key.label}")
                 continue
+            if r.status_code >= 500:
+                # 5xx transitoire : backoff sur la clé et on retente ailleurs.
+                last_err = FtServerError(f"{r.status_code} sur {key.label}")
+                key.available_at = time.time() + self._backoff(attempt)
+                continue
             r.raise_for_status()
             return r
         if last_err:
             raise last_err
         raise FtRateLimit("Échec après rotation de toutes les clés.")
 
-    def paginate(self, endpoint, params=None, page_size=100, max_pages=200):
+    def paginate(self, endpoint, params=None, page_size=100, max_pages=200, page_retries=2):
+        """
+        Pagination résiliente : si une page échoue (rate-limit / 5xx après rotation),
+        on RETENTE LA MÊME PAGE (petite pause) au lieu de repartir de zéro — on
+        reprend donc là où ça a coupé, sans perdre les pages déjà lues.
+        """
         params = dict(params or {})
         params["page[size]"] = page_size
         page = 1
         while page <= max_pages:
             params["page[number]"] = page
-            data = self.get(endpoint, params).json()
+            data = None
+            for attempt in range(page_retries + 1):
+                try:
+                    data = self.get(endpoint, params).json()
+                    break
+                except (FtRateLimit, FtServerError):
+                    if attempt >= page_retries:
+                        raise
+                    time.sleep(min(2.0 ** attempt, 10.0))  # pause puis reprise de la MÊME page
             if not data:
                 break
             yield from data
