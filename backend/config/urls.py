@@ -15,6 +15,7 @@ urlpatterns = [
     path("panel/api/pools", api.api_pools),
     path("panel/api/pools/discover", api.api_pools_discover),
     path("panel/api/pools/<int:pool_id>/activate", api.api_pool_activate),
+    path("panel/api/pools/<int:pool_id>/delete", api.api_pool_delete),
     path("panel/api/users", api.api_users),
     path("panel/api/users/<int:user_id>/adjust", api.api_user_adjust),
     path("panel/api/logs", api.api_logs),

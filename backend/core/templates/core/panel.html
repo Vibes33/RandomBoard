@@ -288,7 +288,7 @@ async function discoverPools(){
   b.textContent='⏳ Recherche…'; toast('Découverte des piscines via l\'API 42…');
   try{
     const r=await api('/panel/api/pools/discover','POST',{});
-    toast(`${r.found} piscine(s) trouvée(s) · ${r.created} ajoutée(s)`);
+    toast(`${r.found} piscine(s) · ${r.created} ajoutée(s), ${r.updated} maj`);
     $('#pool-year').innerHTML='<option value="">Toutes les années</option>'+
       (await api('/panel/api/pools')).years.map(y=>`<option>${y}</option>`).join('');
     await loadPools();
@@ -308,11 +308,19 @@ function renderPools(pools){
     <td class="meta">${p.starts_on} → ${p.ends_on}</td>
     <td class="num">${p.users}</td><td class="num">${p.events}</td>
     <td>${p.is_active?'<span class="chip gain">● active</span>':'<span style="color:var(--faint)">—</span>'}</td>
-    <td>${p.is_active?'<span style="font-size:12px;color:var(--muted)">piscine active</span>'
-       :`<button class="mini" data-act="${p.id}">Définir active</button>`}</td>
+    <td>${p.is_active
+       ?'<span style="font-size:12px;color:var(--muted)">piscine active</span>'
+       :`<button class="mini" data-act="${p.id}">Définir active</button>`
+         +(p.events===0?` <button class="mini danger" data-del="${p.id}" title="Supprimer (piscine vide)">🗑</button>`:'')}</td>
   </tr>`).join('')
-  :'<tr><td colspan="6" class="empty">Aucune piscine. Lance <code>ft_replay</code> pour en créer une.</td></tr>';
+  :'<tr><td colspan="6" class="empty">Aucune piscine. Clique « Découvrir depuis l\'API 42 ».</td></tr>';
   $('#pools-tb').querySelectorAll('[data-act]').forEach(b=>b.onclick=()=>activatePool(b.dataset.act));
+  $('#pools-tb').querySelectorAll('[data-del]').forEach(b=>b.onclick=()=>deletePool(b.dataset.del));
+}
+async function deletePool(id){
+  if(!confirm('Supprimer cette piscine vide ?'))return;
+  const r=await api('/panel/api/pools/'+id+'/delete','POST',{});
+  toast('Piscine supprimée : '+r.deleted); loadPools();
 }
 async function activatePool(id){
   const r=await api('/panel/api/pools/'+id+'/activate','POST',{});

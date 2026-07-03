@@ -103,29 +103,58 @@ def api_pools(request):
 @staff_required
 @require_http_methods(["POST"])
 def api_pools_discover(request):
-    """Va chercher la liste des piscines directement sur l'API 42 et crée les
-    Pool manquants (inactifs). Sert de bouton « réactualiser depuis l'API »."""
+    """Va chercher les piscines sur l'API 42 (via les examens du cursus) et crée
+    les Pool manquants avec des dates PRÉCISES, tous inactifs. Ne touche jamais à
+    la piscine active. Sert de bouton « réactualiser depuis l'API »."""
+    from django.utils.text import slugify
     from .ft_api import FtClient
-    from .sync import fetch_pools
-    from .sync_runner import get_or_create_pool, resolve_target
+    from .sync import fetch_exam_sessions
+    from .sync_runner import resolve_target
 
     client = FtClient()
     if not client.configured:
         return HttpResponseBadRequest("Aucune clé API configurée (voir .env).")
-    campus, _ = resolve_target()
+    campus, cursus = resolve_target()
     if not campus:
         return HttpResponseBadRequest("FT_CAMPUS_ID non défini.")
     try:
-        found = fetch_pools(client, campus)
+        sessions = fetch_exam_sessions(client, campus, cursus)
     except Exception as ex:  # noqa: BLE001
         return HttpResponseBadRequest(f"Erreur API 42 : {ex}")
 
-    created = 0
-    for p in found:
-        _, was_created = get_or_create_pool(
-            campus, year=p["pool_year"], month=p["pool_month"], activate=False)
-        created += int(was_created)
-    return JsonResponse({"ok": True, "found": len(found), "created": created})
+    created = updated = 0
+    for s in sessions:
+        slug = slugify(s["name"])[:50]
+        pool = Pool.objects.filter(slug=slug).first()
+        if pool is None:
+            Pool.objects.create(
+                slug=slug, name=s["name"], starts_on=s["starts_on"],
+                ends_on=s["ends_on"], last_day=s["ends_on"], is_active=False)
+            created += 1
+        elif not EventLog.objects.filter(pool=pool).exists():
+            # piscine pas encore synchronisée → on rafraîchit les dates exactes
+            Pool.objects.filter(pk=pool.pk).update(
+                starts_on=s["starts_on"], ends_on=s["ends_on"], last_day=s["ends_on"])
+            updated += 1
+    return JsonResponse({"ok": True, "found": len(sessions),
+                         "created": created, "updated": updated})
+
+
+@staff_required
+@require_http_methods(["POST"])
+def api_pool_delete(request, pool_id):
+    """Supprime une piscine — uniquement si elle est vide (0 event) et non active,
+    pour nettoyer les découvertes parasites sans jamais effacer de données."""
+    pool = Pool.objects.filter(id=pool_id).first()
+    if not pool:
+        return HttpResponseBadRequest("Piscine introuvable.")
+    if pool.is_active:
+        return HttpResponseBadRequest("Impossible de supprimer la piscine active.")
+    if EventLog.objects.filter(pool=pool).exists():
+        return HttpResponseBadRequest("Piscine non vide (des events existent).")
+    name = pool.name
+    pool.delete()
+    return JsonResponse({"ok": True, "deleted": name})
 
 
 @staff_required

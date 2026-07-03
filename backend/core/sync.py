@@ -16,7 +16,7 @@ Formes normalisées :
 """
 import logging
 from collections import defaultdict
-from datetime import datetime, time as dtime, timedelta, timezone as dttz
+from datetime import date, datetime, time as dtime, timedelta, timezone as dttz
 
 from django.utils import timezone
 
@@ -333,24 +333,65 @@ def fetch_campus_users(client, campus_id, pool_year=None, pool_month=None, inclu
     return out
 
 
-def fetch_pools(client, campus_id, max_pages=12):
+MONTHS_EN = ["", "January", "February", "March", "April", "May", "June",
+             "July", "August", "September", "October", "November", "December"]
+
+
+def _cluster_exam_dates(pairs, gap_days=20, start_offset_days=5):
     """
-    Découvre les piscines (couples pool_year / pool_month distincts) d'un campus
-    depuis l'API 42. Scan borné : étudiants triés par année décroissante pour
-    faire remonter les piscines récentes en premier (max_pages × 100 étudiants).
-    Retourne [{pool_year, pool_month, count}] trié du plus récent au plus ancien.
+    pairs = [(begin_date, end_date), …] d'examens. Regroupe en SESSIONS : un
+    écart > gap_days entre deux examens consécutifs ouvre une nouvelle piscine
+    (les examens d'une même piscine sont ~hebdomadaires). Pour chaque session :
+    début = 1er examen − start_offset_days, fin = dernier examen.
+    Retourne [{starts_on, ends_on, exams}] trié du plus récent au plus ancien.
     """
-    params = {"filter[primary_campus_id]": campus_id, "filter[staff?]": "false",
-              "sort": "-pool_year"}
-    seen = {}
-    for u in client.paginate("/v2/users", params, page_size=100, max_pages=max_pages):
-        year, month = u.get("pool_year"), u.get("pool_month")
-        if not year or not month:
+    pairs = sorted(pairs)
+    if not pairs:
+        return []
+    clusters = [[pairs[0]]]
+    for b, e in pairs[1:]:
+        if (b - clusters[-1][-1][0]).days > gap_days:
+            clusters.append([(b, e)])
+        else:
+            clusters[-1].append((b, e))
+    out = []
+    for cl in clusters:
+        first = min(b for b, _ in cl)
+        last = max(e for _, e in cl)
+        out.append({"starts_on": first - timedelta(days=start_offset_days),
+                    "ends_on": last, "exams": len(cl)})
+    out.sort(key=lambda s: s["starts_on"], reverse=True)
+    return out
+
+
+def fetch_exam_sessions(client, campus_id, cursus_id):
+    """
+    Découvre les sessions de piscine d'un campus À PARTIR DES EXAMENS.
+    Fiable (contrairement à pool_month, qui remonte des étudiants ayant fait leur
+    piscine ailleurs → faux mois type « Février »). On isole le cursus C Piscine,
+    on regroupe les examens rapprochés en sessions et on en déduit des dates
+    précises. Retourne [{name, starts_on, ends_on, exams}].
+    """
+    pairs = []
+    for e in client.paginate(f"/v2/campus/{campus_id}/exams", page_size=100):
+        cursus_ids = e.get("cursus_ids")
+        if not cursus_ids:
+            cursus_ids = [c.get("id") for c in (e.get("cursus") or [])]
+        if cursus_id and cursus_id not in cursus_ids:
             continue
-        key = (str(year), str(month).lower())
-        seen[key] = seen.get(key, 0) + 1
-    return [{"pool_year": y, "pool_month": m, "count": c}
-            for (y, m), c in sorted(seen.items(), reverse=True)]
+        begin = e.get("begin_at")
+        if not begin:
+            continue
+        end = e.get("end_at") or begin
+        try:
+            pairs.append((date.fromisoformat(begin[:10]), date.fromisoformat(end[:10])))
+        except ValueError:
+            continue
+    sessions = _cluster_exam_dates(pairs)
+    for s in sessions:
+        d = s["starts_on"]
+        s["name"] = f"Piscine {MONTHS_EN[d.month]} {d.year} (campus {campus_id})"
+    return sessions
 
 
 def sync_users(pool, users_data):
