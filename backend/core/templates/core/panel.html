@@ -45,6 +45,10 @@
     padding:8px 11px;font-size:13px;font-family:inherit;outline:none;transition:border-color .2s}
   input:focus,select:focus{border-color:var(--green)}
   input[type=number]{width:82px;text-align:right}
+  /* pas de flèches d'incrément (moches) — on garde la saisie clavier */
+  input[type=number]::-webkit-inner-spin-button,
+  input[type=number]::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}
+  input[type=number]{-moz-appearance:textfield;appearance:textfield}
   button{cursor:pointer;font-family:inherit;border-radius:9px;padding:8px 15px;font-size:13px;font-weight:600;
     background:linear-gradient(180deg,rgba(143,224,58,.22),rgba(143,224,58,.08));color:var(--green-b);
     border:1px solid var(--line-hi);transition:transform .18s,box-shadow .18s}
@@ -212,6 +216,19 @@
       <div class="card">
         <div class="hdr" style="color:var(--red)">☠ 5 Places Maudites</div>
         <div id="h-cursed"><div class="spin">Chargement…</div></div>
+      </div>
+    </div>
+
+    <div class="sec" style="margin-top:22px">Étudiants désignés de la semaine
+      <span class="calc" id="desig-week"></span></div>
+    <div class="cols">
+      <div class="card">
+        <div class="hdr" style="color:var(--gold)">✦ Bénis</div>
+        <div id="d-blessed"><div class="spin">Chargement…</div></div>
+      </div>
+      <div class="card">
+        <div class="hdr" style="color:var(--red)">☠ Maudits</div>
+        <div id="d-cursed"><div class="spin">Chargement…</div></div>
       </div>
     </div>
   </section>
@@ -482,6 +499,10 @@ async function loadHosts(){
   const row=h=>`<div class="host"><span class="hn">${h}</span></div>`;
   $('#h-shiny').innerHTML=d.shiny&&d.shiny.length?d.shiny.map(row).join(''):'<div class="empty">Aucune — lance un tirage 🎲</div>';
   $('#h-cursed').innerHTML=d.cursed&&d.cursed.length?d.cursed.map(row).join(''):'<div class="empty">Aucune — lance un tirage 🎲</div>';
+  // Étudiants désignés Maudits/Bénis de la semaine
+  $('#desig-week').textContent=d.week_start?('semaine du '+d.week_start):'';
+  $('#d-blessed').innerHTML=d.blessed&&d.blessed.length?d.blessed.map(row).join(''):'<div class="empty">Aucun cette semaine.</div>';
+  $('#d-cursed').innerHTML=d.cursed_users&&d.cursed_users.length?d.cursed_users.map(row).join(''):'<div class="empty">Aucun cette semaine.</div>';
 }
 
 /* ── 6. Synchronisation API ── */
