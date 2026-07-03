@@ -15,6 +15,7 @@ Formes normalisées :
   evaluation : {id, login, project, begin_at, end_at}
 """
 import logging
+import re
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, time as dtime, timedelta, timezone as dttz
@@ -43,6 +44,37 @@ def _void_daily(user, pool, event_type, day):
     EventLog.objects.filter(
         user=user, pool=pool, event_type=event_type, event_date=day, is_voided=False
     ).update(is_voided=True)
+
+
+def _cluster_of(host_list):
+    """Extrait le cluster d'un poste (ex: 'c1r2p3' → 'c1'). '' si introuvable."""
+    for h in host_list:
+        m = re.match(r"^([a-zA-Z]+\d+)r\d+", h or "")
+        if m:
+            return m.group(1).lower()
+    return ""
+
+
+def _weekday_streak(pool, user_id, day):
+    """
+    Nombre de JOURS OUVRÉS consécutifs (lun–ven) avec une connexion, se terminant
+    à `day`. Le week-end est NEUTRE : il ne casse pas la série et ne l'incrémente
+    pas (on le saute). Un jour ouvré sans connexion casse la série.
+    Suppose l'event logtime_low de `day` déjà écrit.
+    """
+    streak, d = 0, day
+    while True:
+        if d.weekday() >= 5:            # samedi/dimanche : neutre, on saute
+            d -= timedelta(days=1)
+            continue
+        present = EventLog.objects.filter(
+            pool=pool, user_id=user_id, event_date=d,
+            event_type="logtime_low", is_voided=False).exists()
+        if not present:
+            break
+        streak += 1
+        d -= timedelta(days=1)
+    return streak
 
 
 # ─────────────────────────────────────────────────────────────
@@ -113,6 +145,27 @@ def sync_locations(pool, locations, users=None):
                          context={"minutes": round(mins)}, source=API)
             created += 1
 
+        # assiduité : jours ouvrés consécutifs (week-ends neutres) — le jour
+        # même compte car logtime_low vient d'être écrit ci-dessus.
+        if day.weekday() < 5:
+            streak = _weekday_streak(pool, uid, day)
+            _void_daily(u, pool, "assiduity_streak", day)
+            record_event(user=u, pool=pool, rule_key="assiduity_streak", occurred_at=occurred,
+                         context={"streak": streak}, source=API)
+            created += 1
+
+        # cluster où l'élève est assis (points via la table configurée)
+        cluster = _cluster_of(hosts[(uid, day)])
+        if cluster:
+            _void_daily(u, pool, "cluster_bonus", day)
+            cev = record_event(user=u, pool=pool, rule_key="cluster_bonus", occurred_at=occurred,
+                               context={"cluster": cluster}, source=API)
+            if cev and cev.raw_points == 0:      # cluster non configuré → pas de bruit
+                cev.is_voided = True
+                cev.save(update_fields=["is_voided"])
+            elif cev:
+                created += 1
+
     # reconnexion sur le MÊME pc dans la journée
     for (uid, day), hlist in hosts.items():
         if len(hlist) != len(set(hlist)):
@@ -176,10 +229,11 @@ def sync_evaluations(pool, evaluations, users=None):
                             dedup_key=f"evaldur:{ev.get('id')}"):
                 created += 1
         elif "shell" in proj and ("00" in proj or "01" in proj):
-            # « rendre Shell 00/01 » = 1 malus par étudiant & par projet (pas par correction)
-            if record_event(user=u, pool=pool, rule_key="shell_malus", occurred_at=occurred,
-                            context={"project": proj}, source=API,
-                            dedup_key=f"shell:{u.login}:{proj}"):
+            # Shell 00/01 : malus UNIQUEMENT si la note vaut exactement 100.
+            if mark == 100 and record_event(
+                    user=u, pool=pool, rule_key="shell_malus", occurred_at=occurred,
+                    context={"project": proj, "mark": mark}, source=API,
+                    dedup_key=f"shell:{u.login}:{proj}"):
                 created += 1
         elif "rush" in proj:
             if record_event(user=u, pool=pool, rule_key="rush_malus", occurred_at=occurred,
@@ -191,6 +245,12 @@ def sync_evaluations(pool, evaluations, users=None):
             if record_event(user=u, pool=pool, rule_key="project_random", occurred_at=occurred,
                             context={"project": proj}, source=API,
                             dedup_key=f"proj:{u.login}:{proj}"):
+                created += 1
+            # bonus si le projet est validé PILE à 100
+            if mark == 100 and record_event(
+                    user=u, pool=pool, rule_key="project_perfect", occurred_at=occurred,
+                    context={"mark": mark}, source=API,
+                    dedup_key=f"perfect:{u.login}:{proj}"):
                 created += 1
     return created
 

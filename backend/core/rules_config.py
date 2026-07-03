@@ -89,6 +89,13 @@ RULES = [
               "Can't explain": -80, "Cheat": -200}}),
     ("project_random", "event", "Projet évalué (points random ±, au pif)",
      {"type": "random_modifier", "base": 0, "rand_min": -50, "rand_max": 80}),
+    # ─── nouvelles règles (étape 4.1) ───
+    ("assiduity_streak", "gain", "Assiduité : jours de connexion consécutifs (week-ends neutres)",
+     {"type": "multiplier", "value_key": "streak", "factor": 10}),
+    ("project_perfect", "gain", "Projet validé pile à 100 (bonus)",
+     {"type": "fixed", "points": 150}),
+    ("cluster_bonus", "event", "Bonus/malus selon le cluster où l'élève est assis",
+     {"type": "map_lookup", "key_field": "cluster", "default": 0, "map": {}}),
 ]
 
 
@@ -151,5 +158,9 @@ RULE_FIELDS = {
                         _f("default", "Points par défaut")],
     "project_random": [_f("base", "Points de base"),
                        _f("rand_min", "Aléa min"), _f("rand_max", "Aléa max")],
+    "assiduity_streak": [_f("factor", "Points par jour consécutif")],
+    "project_perfect": [_f("points", "Bonus (note = 100)")],
+    "cluster_bonus": [_f("map", "Cluster → points", "map"),
+                      _f("default", "Points par défaut")],
     "manual_adjust": [],  # points fournis à la main au moment de l'ajustement
 }
