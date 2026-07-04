@@ -120,6 +120,31 @@
   .switch input:checked+.sl:before{transform:translateX(20px)}
   .switch input:disabled+.sl{opacity:.4;cursor:not-allowed}
 
+  /* Drawer profil étudiant */
+  #dov{position:fixed;inset:0;background:rgba(0,0,0,.55);opacity:0;pointer-events:none;transition:.25s;z-index:60}
+  #dov.on{opacity:1;pointer-events:auto}
+  #drawer{position:fixed;top:0;right:0;height:100vh;width:min(580px,100%);z-index:61;overflow:auto;padding:24px 26px 60px;
+    background:var(--bg);border-left:1px solid var(--line-hi);transform:translateX(100%);
+    transition:transform .32s var(--ease);box-shadow:-20px 0 60px rgba(0,0,0,.5)}
+  #drawer.on{transform:none}
+  tr.urow{cursor:pointer}
+  .fchip{display:inline-block;padding:3px 11px;border-radius:8px;font-size:12px;font-weight:700}
+  .fchip.peste{background:rgba(143,224,58,.16);color:var(--green)}
+  .fchip.cholera{background:rgba(74,163,255,.16);color:var(--blue)}
+  .fchip.neutre{background:rgba(234,242,236,.1);color:var(--muted)}
+  .st4{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin:16px 0}
+  .stbox{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px 14px}
+  .stbox .l{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px}
+  .stbox .v{font-size:20px;font-weight:700;font-variant-numeric:tabular-nums;margin-top:3px}
+  .tx{border:1px solid var(--line);border-radius:10px;margin-bottom:7px;overflow:hidden;background:var(--panel)}
+  .tx .hd{display:flex;align-items:center;gap:10px;padding:10px 13px;cursor:pointer}
+  .tx .hd:hover,.tx.open .hd{background:rgba(255,255,255,.035)}
+  .tx .dt{font-size:11px;color:var(--faint);width:76px;flex:none;font-variant-numeric:tabular-nums}
+  .tx .ev{flex:1;font-size:13px}
+  .tx .pt{font-weight:700;font-variant-numeric:tabular-nums}
+  .tx .detail{display:none;padding:2px 13px 12px 99px;font-size:12px;color:var(--muted);line-height:1.55}
+  .tx.open .detail{display:block}
+
   #toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%) translateY(30px);opacity:0;
     background:var(--panel-2);border:1px solid var(--line-hi);color:var(--txt);padding:11px 20px;border-radius:12px;
     font-size:13px;backdrop-filter:blur(14px);transition:.3s var(--ease);z-index:50;box-shadow:0 10px 30px rgba(0,0,0,.4)}
@@ -307,6 +332,8 @@
     <div class="card" id="pl-recent"><div class="spin">Chargement…</div></div>
   </section>
 
+  <div id="dov"></div>
+  <aside id="drawer"></aside>
   <div id="toast"></div>
 
 <script>
@@ -414,13 +441,54 @@ async function activatePool(id){
 async function loadUsers(){
   const {users}=await api('/panel/api/users');
   const tb=$('#users-tb');
-  tb.innerHTML=users.length?users.map(u=>`<tr>
+  tb.innerHTML=users.length?users.map(u=>`<tr class="urow" data-user="${u.id}">
     <td class="rk">${u.rank}</td><td><b>${u.login}</b></td><td class="meta">${u.name||''}</td>
     <td class="num">${money(u.total)}</td>
     <td><input type="number" placeholder="± pts" style="width:88px" id="adj-${u.id}">
         <button class="mini" data-adj="${u.id}">OK</button></td></tr>`).join('')
     :'<tr><td colspan="5" class="empty">Aucun étudiant.</td></tr>';
-  tb.querySelectorAll('[data-adj]').forEach(b=>b.onclick=()=>adjust(b.dataset.adj));
+  tb.querySelectorAll('[data-adj]').forEach(b=>b.onclick=e=>{e.stopPropagation();adjust(b.dataset.adj);});
+  tb.querySelectorAll('input[id^=adj-]').forEach(i=>i.onclick=e=>e.stopPropagation());
+  tb.querySelectorAll('.urow').forEach(r=>r.onclick=()=>openProfile(r.dataset.user));
+}
+
+/* ── Profil étudiant (drawer + drill-down) ── */
+const FACT={peste:'🐀 Peste',cholera:'💧 Choléra',neutre:'• Neutre'};
+function closeDrawer(){$('#dov').classList.remove('on');$('#drawer').classList.remove('on');}
+$('#dov').onclick=closeDrawer;
+document.addEventListener('keydown',e=>{if(e.key==='Escape')closeDrawer();});
+function txRow(l){
+  return `<div class="tx"><div class="hd">
+    <span class="dt">${l.at}</span>
+    <span class="ev">${l.event} ${chip(l.category)}</span>
+    <span class="pt ${l.final>=0?'pos':'neg'}">${l.final>=0?'+':''}${Math.round(l.final)}</span></div>
+    <div class="detail">${l.detail}<br><span style="color:var(--faint)">brut ${l.raw} · ×${l.mult} · source ${l.source}</span></div></div>`;
+}
+async function openProfile(id){
+  const d=await api('/panel/api/users/'+id+'/logs');
+  const u=d.user,s=d.stats;
+  $('#drawer').innerHTML=`
+    <div style="display:flex;align-items:center;gap:12px">
+      <div><h2 style="font-size:20px">${u.login}${u.is_patient_zero?' ⭐':''}</h2>
+        <div class="calc">${u.name||''} · rang #${u.rank||'—'}</div></div>
+      <div class="grow"></div>
+      <span class="fchip ${u.faction}">${FACT[u.faction]||u.faction}</span>
+      <button class="mini ghost" id="dclose">✕</button>
+    </div>
+    <div class="st4">
+      <div class="stbox"><div class="l">Score total</div><div class="v ${u.total>=0?'pos':'neg'}">${Math.round(u.total)}</div></div>
+      <div class="stbox"><div class="l">Transactions</div><div class="v">${s.events}</div></div>
+      <div class="stbox"><div class="l">Gains cumulés</div><div class="v pos">+${s.gains}</div></div>
+      <div class="stbox"><div class="l">Pertes cumulées</div><div class="v neg">${s.losses}</div></div>
+    </div>
+    <div class="calc" style="margin-bottom:12px">Jours actifs : <b>${s.days_active}</b> · meilleur coup :
+      <b class="pos">${s.best?('+'+Math.round(s.best.final)):'—'}</b> · pire :
+      <b class="neg">${s.worst?Math.round(s.worst.final):'—'}</b> · le + fréquent : <b>${s.top_event}</b></div>
+    <div class="sec">Historique (${d.logs.length}) — clique une ligne pour le détail</div>
+    <div id="txs">${d.logs.length?d.logs.map(txRow).join(''):'<div class="empty">Aucune transaction.</div>'}</div>`;
+  $('#dclose').onclick=closeDrawer;
+  $('#txs').onclick=e=>{const hd=e.target.closest('.hd');if(hd)hd.parentElement.classList.toggle('open');};
+  $('#dov').classList.add('on');$('#drawer').classList.add('on');
 }
 async function adjust(id){
   const v=parseFloat($('#adj-'+id).value); if(isNaN(v)){toast('Entre un nombre',true);return;}

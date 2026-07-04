@@ -24,8 +24,8 @@ from .auth import staff_required
 from .derived import randomize_daily_hosts
 from .engine import new_rule_version
 from .models import (
-    AppUser, DailyDesignation, DailyEventMultiplier, DailyHost, EventLog, Pool,
-    Rule, SyncRun, Workstation,
+    AppUser, DailyDesignation, DailyEventMultiplier, DailyHost, EventLog,
+    Infection, Pool, Rule, SyncRun, Workstation,
 )
 from .services import (
     adjust_user_score, day_multipliers, randomize_day_multipliers,
@@ -269,6 +269,112 @@ def api_user_adjust(request, user_id):
     board = {r["login"]: r for r in standings(pool, include_today=True)}
     b = board.get(user.login)
     return JsonResponse({"ok": True, "total": round(b["total"]) if b else 0})
+
+
+def _log_detail(event, rule_label, mult, final):
+    """Phrase de drill-down : label + métadonnées d'action + effet du multiplicateur."""
+    ctx = event.raw_payload or {}
+    roll = event.random_roll or {}
+    bits = [rule_label]
+    if ctx.get("minutes") is not None:
+        h, m = divmod(int(ctx["minutes"]), 60)
+        bits.append(f"logtime {h}h{m:02d}")
+    if ctx.get("streak") is not None:
+        bits.append(f"{ctx['streak']} jours consécutifs")
+    if ctx.get("cluster"):
+        bits.append(f"cluster {ctx['cluster']}")
+    if ctx.get("mark") is not None:
+        bits.append(f"note {ctx['mark']}")
+    if ctx.get("duration_min") is not None:
+        bits.append(f"éval en {ctx['duration_min']} min")
+    if ctx.get("corrector"):
+        bits.append(f"correcteur sur place spéciale : {ctx['corrector']}")
+    if ctx.get("project"):
+        bits.append(f"projet {ctx['project']}")
+    if ctx.get("flag"):
+        bits.append(f"flag « {ctx['flag']} »")
+    if ctx.get("reason"):
+        bits.append(f"« {ctx['reason']} »")
+    if roll.get("matched"):
+        m = roll["matched"]
+        bits.append("correspond : " + (", ".join(str(x) for x in m)
+                                        if isinstance(m, list) else str(m)))
+    if roll.get("delta") is not None:
+        bits.append(f"aléa {float(roll['delta']):+g}")
+    if roll.get("rolled") is not None:
+        bits.append(f"tirage {roll['rolled']}")
+    if "hit" in roll:
+        bits.append("gagné 🎲" if roll["hit"] else "perdu 🎲")
+    if roll.get("weight") not in (None, 1):
+        bits.append(f"×{roll['weight']} (éval croisée)")
+    detail = " · ".join(str(b) for b in bits)
+    if float(mult) != 1.0:
+        detail += f"  →  ×{float(mult):g} (multiplicateur du jour) = {final:+.0f}"
+    return detail
+
+
+@staff_required
+def api_user_logs(request, user_id):
+    """
+    Profil d'un étudiant : faction + stats + historique chronologique détaillé
+    (points bruts, multiplicateur du jour appliqué, points finaux, métadonnées).
+    Optimisé : 1 requête events, 1 requête multiplicateurs, 1 classement.
+    """
+    pool = _pool()
+    user = AppUser.objects.filter(id=user_id, pool=pool).first() if pool else None
+    if not user:
+        return HttpResponseBadRequest("Étudiant introuvable.")
+
+    # faction (Peste & Choléra) : neutre si pas encore infecté
+    inf = Infection.objects.filter(pool=pool, user=user).first()
+    faction = inf.disease if inf else "neutre"
+
+    # multiplicateurs du pool, chargés en une fois : {(day, rule_id): mult}
+    mult_map = {(d, rid): m for d, rid, m in
+                DailyEventMultiplier.objects.filter(pool=pool)
+                .values_list("day", "rule_id", "multiplier")}
+
+    events = list(EventLog.objects.filter(pool=pool, user=user, is_voided=False)
+                  .select_related("rule").order_by("-occurred_at"))
+
+    logs, gains, losses, best, worst, days = [], 0.0, 0.0, None, None, set()
+    counts = {}
+    for e in events:
+        label = e.rule.label if e.rule else e.event_type
+        category = e.rule.category if e.rule else "event"
+        mult = mult_map.get((e.event_date, e.rule_id), Decimal("1"))
+        raw = float(e.raw_points)
+        final = round(raw * float(mult), 2)
+        gains += final if final > 0 else 0
+        losses += final if final < 0 else 0
+        days.add(e.event_date)
+        counts[label] = counts.get(label, 0) + 1
+        if best is None or final > best["final"]:
+            best = {"label": label, "final": final}
+        if worst is None or final < worst["final"]:
+            worst = {"label": label, "final": final}
+        logs.append({
+            "id": e.id, "at": e.occurred_at.strftime("%d/%m %H:%M"),
+            "day": e.event_date.strftime("%d/%m"),
+            "event": label, "key": e.event_type, "category": category, "source": e.source,
+            "raw": round(raw, 2), "mult": float(mult), "final": final,
+            "detail": _log_detail(e, label, mult, final),
+        })
+
+    board = {r["login"]: r for r in standings(pool, include_today=True)}
+    b = board.get(user.login, {})
+    top_event = max(counts, key=counts.get) if counts else "—"
+    return JsonResponse({
+        "user": {"login": user.login, "name": user.display_name,
+                 "faction": faction, "is_patient_zero": bool(inf and inf.is_patient_zero),
+                 "total": round(b.get("total", gains + losses)), "rank": b.get("rank")},
+        "stats": {
+            "gains": round(gains), "losses": round(losses),
+            "events": len(events), "days_active": len(days),
+            "best": best, "worst": worst, "top_event": top_event,
+        },
+        "logs": logs,
+    })
 
 
 # ─────────────────────────── 2. Logs ───────────────────────────
