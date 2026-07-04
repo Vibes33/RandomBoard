@@ -348,19 +348,31 @@ async function api(url,method='GET',body=null){
   const o={method,headers:{'Content-Type':'application/json'}};
   if(method!=='GET'){o.headers['X-CSRFToken']=cookie('csrftoken');o.body=JSON.stringify(body||{});}
   const r=await fetch(url,o);
-  if(!r.ok){const t=await r.text();toast(t.slice(0,120)||('Erreur '+r.status),true);throw new Error(t);}
+  if(!r.ok){
+    let t=await r.text();
+    if(/<\s*(!doctype|html)/i.test(t))t='';           // page HTML (500 Django) → illisible
+    toast(t.slice(0,140)||('Erreur serveur ('+r.status+')'),true);
+    throw new Error(t||('HTTP '+r.status));
+  }
   return r.json();
 }
 const money=v=>`<span class="${v>=0?'pos':'neg'}">${v>=0?'+':''}${Math.round(v)}</span>`;
 const chip=c=>`<span class="chip ${c}">${c}</span>`;
+// Échappement systématique des données externes (logins, noms, feedbacks…) injectées en innerHTML.
+const esc=s=>String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 
-/* ── tabs (lazy) ── */
+/* ── tabs : init (bind) une seule fois, refresh (données) à CHAQUE retour ── */
 const inited={};
 const init={pools:initPools,users:loadUsers,logs:initLogs,points:loadPoints,days:initDays,hosts:initHosts,sync:initSync,plague:initPlague};
+const refresh={pools:loadPools,users:loadUsers,logs:loadLogs,points:loadPoints,
+  days:()=>$('#day-pick').value&&loadDay(),hosts:loadHosts,
+  sync:()=>{refreshSync();loadAuto();},plague:loadPlague};
 $$('.tab').forEach(t=>t.onclick=()=>{
   $$('.tab').forEach(x=>x.classList.toggle('on',x===t));
   $$('.pane').forEach(p=>p.classList.toggle('on',p.id==='p-'+t.dataset.tab));
-  if(!inited[t.dataset.tab]){inited[t.dataset.tab]=1;init[t.dataset.tab]();}
+  const k=t.dataset.tab;
+  if(!inited[k]){inited[k]=1;init[k]();}
+  else if(refresh[k])refresh[k]();
 });
 
 /* ── 0. Piscines ── */
@@ -397,7 +409,7 @@ async function loadPools(){
 }
 function renderPools(pools){
   $('#pools-tb').innerHTML=pools.length?pools.map(p=>`<tr>
-    <td><b>${p.name}</b><div style="font-size:11px;color:var(--faint)">${p.slug}</div></td>
+    <td><b>${esc(p.name)}</b><div style="font-size:11px;color:var(--faint)">${esc(p.slug)}</div></td>
     <td class="meta">${p.starts_on} → ${p.ends_on}</td>
     <td class="meta">${p.campus?('campus '+p.campus):'—'}${p.cursus?(' · cursus '+p.cursus):''}</td>
     <td class="num">${p.users}</td><td class="num">${p.events}</td>
@@ -442,7 +454,7 @@ async function loadUsers(){
   const {users}=await api('/panel/api/users');
   const tb=$('#users-tb');
   tb.innerHTML=users.length?users.map(u=>`<tr class="urow" data-user="${u.id}">
-    <td class="rk">${u.rank}</td><td><b>${u.login}</b></td><td class="meta">${u.name||''}</td>
+    <td class="rk">${u.rank}</td><td><b>${esc(u.login)}</b></td><td class="meta">${esc(u.name||'')}</td>
     <td class="num">${money(u.total)}</td>
     <td><input type="number" placeholder="± pts" style="width:88px" id="adj-${u.id}">
         <button class="mini" data-adj="${u.id}">OK</button></td></tr>`).join('')
@@ -460,17 +472,17 @@ document.addEventListener('keydown',e=>{if(e.key==='Escape')closeDrawer();});
 function txRow(l){
   return `<div class="tx"><div class="hd">
     <span class="dt">${l.at}</span>
-    <span class="ev">${l.event} ${chip(l.category)}</span>
+    <span class="ev">${esc(l.event)} ${chip(l.category)}</span>
     <span class="pt ${l.final>=0?'pos':'neg'}">${l.final>=0?'+':''}${Math.round(l.final)}</span></div>
-    <div class="detail">${l.detail}<br><span style="color:var(--faint)">brut ${l.raw} · ×${l.mult} · source ${l.source}</span></div></div>`;
+    <div class="detail">${esc(l.detail)}<br><span style="color:var(--faint)">brut ${l.raw} · ×${l.mult} · source ${esc(l.source)}</span></div></div>`;
 }
 async function openProfile(id){
   const d=await api('/panel/api/users/'+id+'/logs');
   const u=d.user,s=d.stats;
   $('#drawer').innerHTML=`
     <div style="display:flex;align-items:center;gap:12px">
-      <div><h2 style="font-size:20px">${u.login}${u.is_patient_zero?' ⭐':''}</h2>
-        <div class="calc">${u.name||''} · rang #${u.rank||'—'}</div></div>
+      <div><h2 style="font-size:20px">${esc(u.login)}${u.is_patient_zero?' ⭐':''}</h2>
+        <div class="calc">${esc(u.name||'')} · rang #${u.rank||'—'}</div></div>
       <div class="grow"></div>
       <span class="fchip ${u.faction}">${FACT[u.faction]||u.faction}</span>
       <button class="mini ghost" id="dclose">✕</button>
@@ -483,7 +495,7 @@ async function openProfile(id){
     </div>
     <div class="calc" style="margin-bottom:12px">Jours actifs : <b>${s.days_active}</b> · meilleur coup :
       <b class="pos">${s.best?('+'+Math.round(s.best.final)):'—'}</b> · pire :
-      <b class="neg">${s.worst?Math.round(s.worst.final):'—'}</b> · le + fréquent : <b>${s.top_event}</b></div>
+      <b class="neg">${s.worst?Math.round(s.worst.final):'—'}</b> · le + fréquent : <b>${esc(s.top_event)}</b></div>
     <div class="sec">Historique (${d.logs.length}) — clique une ligne pour le détail</div>
     <div id="txs">${d.logs.length?d.logs.map(txRow).join(''):'<div class="empty">Aucune transaction.</div>'}</div>`;
   $('#dclose').onclick=closeDrawer;
@@ -510,14 +522,13 @@ async function loadLogs(){
   renderLogs(d.logs);
 }
 function renderLogs(logs){
-  $('#logs-tb').innerHTML=logs.length?logs.map(l=>`<tr><td class="meta">${l.at}</td><td><b>${l.login}</b></td>
-    <td>${l.event}</td><td class="meta">${l.source}</td><td class="meta">${l.day}</td>
+  $('#logs-tb').innerHTML=logs.length?logs.map(l=>`<tr><td class="meta">${l.at}</td><td><b>${esc(l.login)}</b></td>
+    <td>${esc(l.event)}</td><td class="meta">${esc(l.source)}</td><td class="meta">${l.day}</td>
     <td class="num">${money(l.points)}</td></tr>`).join('')
     :'<tr><td colspan="6" class="empty">Aucun log.</td></tr>';
 }
 
 /* ── 3. Options de Points (schéma dynamique : tous les points éditables) ── */
-const esc=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
 async function loadPoints(){
   const {rules}=await api('/panel/api/points');
   const b=$('#points-b');
@@ -575,9 +586,12 @@ async function savePoints(box,id){
 }
 
 /* ── 4. Gestion par Jour ── */
+const todayStr=()=>new Date().toLocaleDateString('sv');  // AAAA-MM-JJ local
+const pickDefaultDay=days=>days.includes(todayStr())?todayStr():days[days.length-1];
 async function initDays(){
   const d=await api('/panel/api/days');
   $('#day-pick').innerHTML=d.days.map(x=>`<option>${x}</option>`).join('');
+  if(d.days.length)$('#day-pick').value=pickDefaultDay(d.days);
   $('#day-pick').onchange=loadDay;
   $('#rand-all').onclick=async()=>{await api('/panel/api/days','POST',{date:$('#day-pick').value,action:'randomize'});toast('Jour re-randomisé + scores recalculés');loadDay();};
   $('#rand-alldays').onclick=async()=>{
@@ -616,7 +630,7 @@ async function randOne(id){
 async function initHosts(){
   const d=await api('/panel/api/hosts');
   $('#host-day').innerHTML=d.days.map(x=>`<option>${x}</option>`).join('');
-  if(d.days.length)$('#host-day').value=d.days[d.days.length-1];
+  if(d.days.length)$('#host-day').value=pickDefaultDay(d.days);
   $('#host-day').onchange=()=>loadHosts();
   $('#host-rand').onclick=async()=>{await api('/panel/api/hosts','POST',{date:$('#host-day').value});toast('Places re-tirées');loadHosts();};
   loadHosts();
@@ -624,7 +638,7 @@ async function initHosts(){
 async function loadHosts(){
   const d=await api('/panel/api/hosts?date='+$('#host-day').value);
   $('#host-info').textContent=(d.candidates||0)+' postes connus';
-  const row=h=>`<div class="host"><span class="hn">${h}</span></div>`;
+  const row=h=>`<div class="host"><span class="hn">${esc(h)}</span></div>`;
   $('#h-shiny').innerHTML=d.shiny&&d.shiny.length?d.shiny.map(row).join(''):'<div class="empty">Aucune — lance un tirage 🎲</div>';
   $('#h-cursed').innerHTML=d.cursed&&d.cursed.length?d.cursed.map(row).join(''):'<div class="empty">Aucune — lance un tirage 🎲</div>';
   // Étudiants Maudits/Bénis DU JOUR
@@ -678,7 +692,7 @@ async function refreshSync(){
   const d=await api('/panel/api/sync');
   renderSyncState(d.current);
   $('#sync-hist').innerHTML='<div class="sec" style="margin-top:2px">Historique</div>'+
-    (d.history.length?d.history.map(h=>`<div class="host"><span class="hn">#${h.id} · ${h.pool||'—'}</span>
+    (d.history.length?d.history.map(h=>`<div class="host"><span class="hn">#${h.id} · ${esc(h.pool||'—')}</span>
       <span class="meta"><span class="badge ${h.status}">${h.status}</span> ${h.events} ev · ${h.at}</span></div>`).join('')
     :'<div class="empty">Aucun run.</div>');
   if(d.running&&d.current)pollSync(d.current.id);
@@ -688,9 +702,10 @@ function pollSync(id){
   syncPoll=setInterval(async()=>{
     const {run}=await api('/panel/api/sync/status?id='+id);
     renderSyncState(run);
-    if(run&&(run.status==='done'||run.status==='error')){
+    if(run&&(run.status==='done'||run.status==='error'||run.status==='cancelled')){
       clearInterval(syncPoll);syncPoll=null;
-      toast(run.status==='done'?'Synchronisation terminée ✓':'Synchronisation en erreur',run.status==='error');
+      toast({done:'Synchronisation terminée ✓',error:'Synchronisation en erreur',
+             cancelled:'Synchronisation annulée'}[run.status],run.status==='error');
       refreshSync();
     }
   },2000);
@@ -702,14 +717,14 @@ function renderSyncState(run){
   box.innerHTML=`
     <div class="stat" style="align-items:center">
       <span>Statut <b><span class="badge ${run.status}">${run.status}</span></b></span>
-      <span>Piscine <b>${run.pool||'—'}</b></span>
+      <span>Piscine <b>${esc(run.pool||'—')}</b></span>
       <div class="grow"></div>
       ${active?'<button class="mini danger" id="sync-cancel">✕ Annuler</button>':''}</div>
     <div class="stat"><span>Jour <b>${run.current_day||'—'}</b></span>
       <span>Progression <b>${run.days_done}/${run.days_total||'?'}</b></span>
       <span>Events <b>${run.events}</b></span></div>
     <div class="prog"><i style="width:${run.progress}%"></i></div>
-    ${run.error?`<div class="neg" style="font-size:12px;margin:6px 0">${run.error}</div>`:''}
+    ${run.error?`<div class="neg" style="font-size:12px;margin:6px 0">${esc(run.error)}</div>`:''}
     <div class="logbox" id="sync-log">${(run.log||'').replace(/</g,'&lt;')}</div>`;
   const lb=$('#sync-log'); if(lb)lb.scrollTop=lb.scrollHeight;
   const cb=$('#sync-cancel'); if(cb)cb.onclick=cancelSync;
@@ -732,13 +747,13 @@ async function loadPlague(){
   $('#pl-peste-n').textContent='· '+stats.peste.count+' inf.';
   $('#pl-cholera-n').textContent='· '+stats.cholera.count+' inf.';
   const grp=g=>`<div class="stat"><span>Infectés <b>${g.count}</b></span><span>Points <b>${money(g.points)}</b></span></div>
-    <div class="calc">Patients zéro : ${g.patient_zero.join(', ')||'—'}</div>`;
+    <div class="calc">Patients zéro : ${esc(g.patient_zero.join(', ')||'—')}</div>`;
   $('#pl-peste').innerHTML=grp(stats.peste);$('#pl-cholera').innerHTML=grp(stats.cholera);
   $('#pl-payday').textContent='Boost versé le '+stats.payout_day+' (1 j avant l\'exam final).';
   if(points_per_person!=null && document.activeElement!==$('#pl-points'))$('#pl-points').value=points_per_person;
   $('#pl-recent').innerHTML=stats.recent.length?stats.recent.map(r=>`<div class="host">
-    <span class="hn">${r.login} ${r.zero?'⭐':''}</span>
-    <span class="meta"><span class="badge ${r.disease==='peste'?'done':'running'}">${r.disease}</span> ${r.source?('← '+r.source):'patient zéro'}</span></div>`).join('')
+    <span class="hn">${esc(r.login)} ${r.zero?'⭐':''}</span>
+    <span class="meta"><span class="badge ${r.disease==='peste'?'done':'running'}">${r.disease}</span> ${r.source?('← '+esc(r.source)):'patient zéro'}</span></div>`).join('')
     :'<div class="empty">Personne d\'infecté (l\'épidémie démarre à la 1re synchro).</div>';
 }
 async function savePlague(){

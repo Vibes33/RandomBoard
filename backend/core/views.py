@@ -71,7 +71,7 @@ def _render_board(pool, board, colored=True):
         "",
         f"   {p['title']}{p['bold']}✦ 42 - Leaderboard ✦{p['reset']}"
         f"   {p['muted']}{n} participants{p['reset']}",
-        f"   {p['muted']}Piscine 2026 - promo Juillet{p['reset']}",
+        f"   {p['muted']}{pool.name} · {pool.starts_on:%d/%m} → {pool.ends_on:%d/%m/%Y}{p['reset']}",
         divider(),
         "",
     ]
