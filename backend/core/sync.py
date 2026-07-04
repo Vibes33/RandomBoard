@@ -132,8 +132,9 @@ def sync_locations(pool, locations, users=None):
                          context={"minutes": round(mins)}, source=API)
             created += 1
 
-        # bonus « logtime quasi-plein » : total du jour ∈ [23h50, 23h59] (1430–1439 min)
-        if 1430 <= round(mins) <= 1439:
+        # bonus « logtime quasi-plein », en paliers (évaluateur tiers) :
+        # ≥ 20 h (1200 min) → palier intermédiaire ; ≥ 23h50 (1430) → gros bonus.
+        if round(mins) >= 1200:
             _void_daily(u, pool, "midnight_bonus", day)
             record_event(user=u, pool=pool, rule_key="midnight_bonus", occurred_at=occurred,
                          context={"minutes": round(mins)}, source=API)

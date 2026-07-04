@@ -110,8 +110,14 @@ def ev_threshold_window(params, ctx, rng):
 
 
 def ev_multiplier(params, ctx, rng):
-    """Multiplie une valeur du contexte (ex: dernier jour: corrections × 1000)."""
+    """
+    Multiplie une valeur du contexte (ex: streak × 10). `cap` optionnel :
+    plafonne la valeur AVANT multiplication (ex: streak capé à 7 j → max 70)
+    pour éviter les rentes à intérêts composés.
+    """
     v = _num(ctx, params)
+    if params.get("cap") is not None:
+        v = min(v, float(params["cap"]))
     return _d(v * float(params["factor"])), None
 
 
@@ -172,6 +178,23 @@ def ev_keywords(params, ctx, rng):
     return _d(total), roll
 
 
+def ev_tiers(params, ctx, rng):
+    """
+    Paliers par seuil : params['tiers'] = {seuil: points}. On prend le PLUS
+    GRAND seuil ≤ valeur (floor lookup). Ex rush (note) : {"50": 50, "1": -50,
+    "0": -150} → note 84 = +50, note 30 = −50, note 0 = −150.
+    Configurable dans le panel comme une map seuil → points.
+    """
+    v = _num(ctx, params)
+    best_thr, pts = None, params.get("default", 0)
+    for thr, p in (params.get("tiers") or {}).items():
+        t = float(thr)
+        if v >= t and (best_thr is None or t > best_thr):
+            best_thr, pts = t, p
+    roll = {"matched": f"palier {best_thr:g}"} if best_thr is not None else None
+    return _d(pts), roll
+
+
 def ev_map_lookup(params, ctx, rng):
     """Cherche une clé du contexte dans une table (ex: flag de correction → points)."""
     key = str(ctx.get(params.get("key_field", "key"), "")).lower()
@@ -194,6 +217,7 @@ EVALUATORS = {
     "weighted": ev_weighted,
     "keywords": ev_keywords,
     "map_lookup": ev_map_lookup,
+    "tiers": ev_tiers,
 }
 
 
