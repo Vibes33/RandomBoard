@@ -130,25 +130,29 @@ def snapshot_day(pool, day):
     )
     fp = _fingerprint(pool, day)
 
+    # Cumuls J-1 de TOUS les users en 1 requête (avant : 1 requête par user).
+    prev_map = dict(
+        DailySnapshot.objects.filter(pool=pool, day__lt=day)
+        .order_by("user_id", "-day").distinct("user_id")
+        .values_list("user_id", "cumulative_total")
+    )
+
     rows = []
     for uid in set(day_final) | existing:
         raw = day_raw.get(uid, ZERO)
         final = day_final.get(uid, ZERO)
-        prev = (
-            DailySnapshot.objects.filter(pool=pool, user_id=uid, day__lt=day)
-            .order_by("-day").values_list("cumulative_total", flat=True).first()
-        ) or ZERO
-        rows.append((uid, raw, final, prev + final))
+        rows.append((uid, raw, final, prev_map.get(uid, ZERO) + final))
 
     rows.sort(key=lambda t: t[3], reverse=True)  # rang du jour par cumul
-    for rank, (uid, raw, final, cum) in enumerate(rows, start=1):
-        DailySnapshot.objects.update_or_create(
-            pool=pool, user_id=uid, day=day,
-            defaults=dict(
-                day_raw_points=raw, day_coefficient=ONE, day_final_points=final,
-                cumulative_total=cum, rank=rank, rules_fingerprint=fp,
-            ),
-        )
+    DailySnapshot.objects.bulk_create(
+        [DailySnapshot(pool=pool, user_id=uid, day=day,
+                       day_raw_points=raw, day_coefficient=ONE, day_final_points=final,
+                       cumulative_total=cum, rank=rank, rules_fingerprint=fp)
+         for rank, (uid, raw, final, cum) in enumerate(rows, start=1)],
+        update_conflicts=True, unique_fields=["user", "day"],
+        update_fields=["day_raw_points", "day_coefficient", "day_final_points",
+                       "cumulative_total", "rank", "rules_fingerprint", "pool"],
+    )
     return len(rows)
 
 

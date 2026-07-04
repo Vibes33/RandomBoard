@@ -13,6 +13,7 @@ Ajouter une règle = ajouter une ligne de config (params), pas du code.
 Ajouter une *famille* de calcul = ajouter un évaluateur dans EVALUATORS.
 """
 import random
+import time as _time
 from datetime import time
 from decimal import Decimal, ROUND_HALF_UP
 
@@ -21,6 +22,23 @@ from django.utils import timezone
 from .models import EventLog, Rule, RuleVersion
 
 Q = Decimal("0.01")
+
+# Cache court des (Rule, RuleVersion) par clé : record_event est appelé des
+# milliers de fois par sync — sans cache c'est 2 SELECT par event. TTL court
+# pour que les éditions du staff (autre process) soient reprises vite.
+_RULE_CACHE = {}
+_RULE_TTL = 30.0
+
+
+def _cached_rule(rule_key):
+    now = _time.monotonic()
+    hit = _RULE_CACHE.get(rule_key)
+    if hit and now - hit[0] < _RULE_TTL:
+        return hit[1]
+    rule = Rule.objects.filter(key=rule_key, is_active=True).first()
+    rv = rule.current_version if rule else None
+    _RULE_CACHE[rule_key] = (now, (rule, rv))
+    return rule, rv
 
 
 def _d(x):
@@ -212,8 +230,7 @@ def record_event(*, user, pool, rule_key, occurred_at, context,
     if dedup_key and EventLog.objects.filter(dedup_key=dedup_key).exists():
         return None
 
-    rule = Rule.objects.filter(key=rule_key, is_active=True).first()
-    rv = rule.current_version if rule else None
+    rule, rv = _cached_rule(rule_key)
     result = evaluate(rv, context, rng=rng)
 
     event = EventLog.objects.create(
@@ -240,6 +257,7 @@ def new_rule_version(rule, params, user=None):
     if current:
         current.valid_to = now
         current.save(update_fields=["valid_to"])
+    _RULE_CACHE.pop(rule.key, None)  # invalide le cache local (autres process : TTL)
     return RuleVersion.objects.create(
         rule=rule, version=next_no, params=params, valid_from=now, created_by=user,
     )

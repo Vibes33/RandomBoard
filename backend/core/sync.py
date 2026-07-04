@@ -55,22 +55,30 @@ def _cluster_of(host_list):
     return ""
 
 
-def _weekday_streak(pool, user_id, day):
+def _presence_set(pool):
+    """
+    Jours de présence {(user_id, date)} de toute la piscine, en UNE requête.
+    Sert au calcul des streaks en mémoire (avant : 1 requête SQL par jour de
+    streak × par étudiant × par jour syncé — N+1 massif en fin de piscine).
+    """
+    return set(EventLog.objects.filter(
+        pool=pool, event_type="logtime_low", is_voided=False
+    ).values_list("user_id", "event_date"))
+
+
+def _weekday_streak(presence, user_id, day):
     """
     Nombre de JOURS OUVRÉS consécutifs (lun–ven) avec une connexion, se terminant
     à `day`. Le week-end est NEUTRE : il ne casse pas la série et ne l'incrémente
     pas (on le saute). Un jour ouvré sans connexion casse la série.
-    Suppose l'event logtime_low de `day` déjà écrit.
+    Pur : lit le set `presence` (le jour courant doit y avoir été ajouté).
     """
     streak, d = 0, day
     while True:
         if d.weekday() >= 5:            # samedi/dimanche : neutre, on saute
             d -= timedelta(days=1)
             continue
-        present = EventLog.objects.filter(
-            pool=pool, user_id=user_id, event_date=d,
-            event_type="logtime_low", is_voided=False).exists()
-        if not present:
+        if (user_id, d) not in presence:
             break
         streak += 1
         d -= timedelta(days=1)
@@ -109,12 +117,14 @@ def sync_locations(pool, locations, users=None):
             ignore_conflicts=True)
 
     id_to_user = {u.id: u for u in users.values()}
+    presence = _presence_set(pool)  # 1 requête, streaks calculés en mémoire
     for (uid, day), mins in minutes.items():
         u = id_to_user[uid]
         occurred = timezone.make_aware(datetime.combine(day, dtime(12, 0)))
         _void_daily(u, pool, "logtime_low", day)
         record_event(user=u, pool=pool, rule_key="logtime_low", occurred_at=occurred,
                      context={"minutes": round(mins)}, source=API)
+        presence.add((uid, day))
         created += 1
         if mins >= 720:  # logtime haut (≥12h)
             _void_daily(u, pool, "logtime_high", day)
@@ -132,7 +142,7 @@ def sync_locations(pool, locations, users=None):
         # assiduité : jours ouvrés consécutifs (week-ends neutres) — le jour
         # même compte car logtime_low vient d'être écrit ci-dessus.
         if day.weekday() < 5:
-            streak = _weekday_streak(pool, uid, day)
+            streak = _weekday_streak(presence, uid, day)
             _void_daily(u, pool, "assiduity_streak", day)
             record_event(user=u, pool=pool, rule_key="assiduity_streak", occurred_at=occurred,
                          context={"streak": streak}, source=API)
