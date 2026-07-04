@@ -150,7 +150,7 @@ def spread_plague(pool, pairs):
     if not Infection.objects.filter(pool=pool).exists():
         return 0
     users = {u.login: u.id for u in AppUser.objects.filter(pool=pool)}
-    id_pairs = [(users[a], users[b]) for a, b in pairs
+    id_pairs = [(users[a], users[b]) for a, b, *_ in pairs
                 if a in users and b in users and users[a] != users[b]]
     state = dict(Infection.objects.filter(pool=pool).values_list("user_id", "disease"))
     for uid, disease, src, kind in _spread(state, id_pairs):

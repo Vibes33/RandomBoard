@@ -22,8 +22,8 @@ from .ft_api import NETWORK_ERRORS, FtRateLimit, FtServerError
 from .models import Pool
 from .services import snapshot_day
 from .sync import (
-    fetch_campus_users, fetch_day,
-    sync_evaluations, sync_feedbacks, sync_flags, sync_locations, sync_users,
+    fetch_campus_users, fetch_day, sync_evaluations, sync_feedbacks, sync_flags,
+    sync_host_effects, sync_locations, sync_users,
 )
 
 MONTHS = {m.lower(): i for i, m in enumerate(calendar.month_name) if m}
@@ -148,7 +148,8 @@ def run_full_sync(*, client, pool, campus, cursus, d_from=None, d_to=None,
             n = (sync_locations(pool, p["locations"], users)
                  + sync_feedbacks(pool, p["feedbacks"], users)
                  + sync_evaluations(pool, p["evaluations"], users)
-                 + sync_flags(pool, p["flags"], users))
+                 + sync_flags(pool, p["flags"], users)
+                 + sync_host_effects(pool, d, p["locations"], p.get("pairs", []), users))
             from .chaos import spread_plague
             spread_plague(pool, p.get("pairs", []))  # propagation Peste & Choléra
             snapshot_day(pool, d)  # fige le jour, comme le cron de minuit

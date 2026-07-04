@@ -85,8 +85,6 @@ def sync_locations(pool, locations, users=None):
     minutes = defaultdict(float)
     hosts = defaultdict(list)
     seen_hosts = set()
-    # places Bénites/Maudites du jour (cache par jour)
-    daily = {}
     created = 0
 
     for loc in locations:
@@ -103,27 +101,6 @@ def sync_locations(pool, locations, users=None):
         hosts[(u.id, day)].append(host)
         if host:
             seen_hosts.add(host)
-
-        # bonus connexion 23:50–23:59
-        local = timezone.localtime(b)
-        if dtime(23, 50) <= local.time() <= dtime(23, 59):
-            if record_event(user=u, pool=pool, rule_key="midnight_bonus", occurred_at=b,
-                            context={"time": local.strftime("%H:%M")}, source=API,
-                            dedup_key=f"midnight:{loc.get('id')}"):
-                created += 1
-
-        # place Bénite / Maudite DU JOUR
-        if host:
-            if day not in daily:
-                daily[day] = {dh.hostname: dh.kind for dh in
-                              DailyHost.objects.filter(pool=pool, day=day)}
-            kind = daily[day].get(host)
-            if kind:
-                rule_key = "shiny_host" if kind == "shiny" else "cursed_host"
-                if record_event(user=u, pool=pool, rule_key=rule_key, occurred_at=b,
-                                context={"host": host}, source=API,
-                                dedup_key=f"host:{loc.get('id')}"):
-                    created += 1
 
     # registre des postes connus (pool de tirage des places)
     if seen_hosts:
@@ -142,6 +119,13 @@ def sync_locations(pool, locations, users=None):
         if mins >= 720:  # logtime haut (≥12h)
             _void_daily(u, pool, "logtime_high", day)
             record_event(user=u, pool=pool, rule_key="logtime_high", occurred_at=occurred,
+                         context={"minutes": round(mins)}, source=API)
+            created += 1
+
+        # bonus « logtime quasi-plein » : total du jour ∈ [23h50, 23h59] (1430–1439 min)
+        if 1430 <= round(mins) <= 1439:
+            _void_daily(u, pool, "midnight_bonus", day)
+            record_event(user=u, pool=pool, rule_key="midnight_bonus", occurred_at=occurred,
                          context={"minutes": round(mins)}, source=API)
             created += 1
 
@@ -274,15 +258,60 @@ def sync_flags(pool, flags, users=None):
     return created
 
 
+def sync_host_effects(pool, day, locations, pairs, users=None):
+    """
+    Places Bénites/Maudites — bonne cible : l'étudiant ASSIS sur une place
+    shiny/cursed est un « host ». Quand il CORRIGE quelqu'un, c'est le CORRIGÉ
+    qui reçoit le bonus/malus (pas le correcteur). On croise donc les places du
+    jour avec les couples de correction du jour.
+    """
+    users = users or _users(pool)
+    kinds = {dh.hostname: dh.kind for dh in DailyHost.objects.filter(pool=pool, day=day)}
+    if not kinds:
+        return 0
+    # étudiants assis sur une place shiny / cursed ce jour-là
+    shiny_students, cursed_students = set(), set()
+    for loc in locations:
+        k = kinds.get(loc.get("host") or "")
+        login = loc.get("login")
+        if not login:
+            continue
+        if k == "shiny":
+            shiny_students.add(login)
+        elif k == "cursed":
+            cursed_students.add(login)
+
+    occurred = timezone.make_aware(datetime.combine(day, dtime(12, 0)))
+    created = 0
+    for corrector, corrected, sid in pairs:
+        cu = users.get(corrected)
+        if not cu:
+            continue
+        if corrector in shiny_students:
+            rule_key, tag = "shiny_host", "shinyhost"
+        elif corrector in cursed_students:
+            rule_key, tag = "cursed_host", "cursedhost"
+        else:
+            continue
+        if record_event(user=cu, pool=pool, rule_key=rule_key, occurred_at=occurred,
+                        context={"corrector": corrector}, source=API,
+                        dedup_key=f"{tag}:{sid}:{corrected}"):
+            created += 1
+    return created
+
+
 def sync_all(pool, data):
-    users = _users(pool)
     from .chaos import spread_plague
+    users = _users(pool)
+    pairs = data.get("pairs", [])
+    locations = data.get("locations", [])
     return {
-        "locations": sync_locations(pool, data.get("locations", []), users),
+        "locations": sync_locations(pool, locations, users),
         "feedbacks": sync_feedbacks(pool, data.get("feedbacks", []), users),
         "evaluations": sync_evaluations(pool, data.get("evaluations", []), users),
         "flags": sync_flags(pool, data.get("flags", []), users),
-        "plague": spread_plague(pool, data.get("pairs", [])),
+        "hosts": sync_host_effects(pool, timezone.localdate(), locations, pairs, users),
+        "plague": spread_plague(pool, pairs),
     }
 
 
@@ -353,9 +382,9 @@ def fetch_scale_teams_range(client, campus_id, start_iso, end_iso, cursus_id=Non
             login = (c or {}).get("login")
             if not login:
                 continue
-            # couple correcteur↔corrigé (propagation Peste & Choléra)
+            # couple correcteur↔corrigé (propagation Peste & Choléra + places)
             if corrector and corrector != login:
-                pairs.append((corrector, login))
+                pairs.append((corrector, login, sid))
             if project:
                 evaluations.append({"id": f"{sid}:{login}", "login": login, "project": project,
                                     "begin_at": begin, "end_at": filled, "mark": mark})
