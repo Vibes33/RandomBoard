@@ -328,17 +328,80 @@ def sync_host_effects(pool, day, locations, pairs=None, users=None):
     return created
 
 
+def sync_exam_time(pool, day, locations, windows, users=None):
+    """
+    Temps passé en examen = chevauchement entre la présence (locations) et les
+    fenêtres d'examen du jour. Zéro appel API supplémentaire par étudiant :
+    les fenêtres sont campus-wide, l'overlap se calcule sur les locations déjà
+    fetchées. Agrégat journalier (voidé/réécrit) → idempotent.
+    """
+    users = users or _users(pool)
+    todays = [(b, e) for b, e in windows if timezone.localdate(b) == day]
+    if not todays:
+        return 0
+    mins = defaultdict(float)
+    for loc in locations:
+        u = users.get(loc.get("login"))
+        if not u:
+            continue
+        lb = _parse(loc.get("begin_at"))
+        if not lb:
+            continue
+        le = _parse(loc.get("end_at")) or timezone.now()
+        for wb, we in todays:
+            ov = (min(le, we) - max(lb, wb)).total_seconds() / 60
+            if ov > 0:
+                mins[u.id] += ov
+    id_to_user = {u.id: u for u in users.values()}
+    occurred = timezone.make_aware(datetime.combine(day, dtime(12, 0)))
+    created = 0
+    for uid, m in mins.items():
+        u = id_to_user[uid]
+        _void_daily(u, pool, "exam_time", day)
+        record_event(user=u, pool=pool, rule_key="exam_time", occurred_at=occurred,
+                     context={"minutes": round(m)}, source=API)
+        created += 1
+    return created
+
+
+def sync_last_day(pool, day, pairs, users=None):
+    """
+    Dernier jour de la piscine : chaque correction DONNÉE rapporte factor points
+    au correcteur (règle last_day_corrections, multiplier sur le compte).
+    """
+    if day != pool.ends_on:
+        return 0
+    users = users or _users(pool)
+    counts = defaultdict(int)
+    for corrector, *_ in pairs:
+        counts[corrector] += 1
+    occurred = timezone.make_aware(datetime.combine(day, dtime(12, 0)))
+    created = 0
+    for login, n in counts.items():
+        u = users.get(login)
+        if not u:
+            continue
+        _void_daily(u, pool, "last_day_corrections", day)
+        record_event(user=u, pool=pool, rule_key="last_day_corrections",
+                     occurred_at=occurred, context={"correction_points": n}, source=API)
+        created += 1
+    return created
+
+
 def sync_all(pool, data):
     from .chaos import spread_plague
     users = _users(pool)
     pairs = data.get("pairs", [])
     locations = data.get("locations", [])
+    today = timezone.localdate()
     return {
         "locations": sync_locations(pool, locations, users),
         "feedbacks": sync_feedbacks(pool, data.get("feedbacks", []), users),
         "evaluations": sync_evaluations(pool, data.get("evaluations", []), users),
         "flags": sync_flags(pool, data.get("flags", []), users),
-        "hosts": sync_host_effects(pool, timezone.localdate(), locations, pairs, users),
+        "hosts": sync_host_effects(pool, today, locations, pairs, users),
+        "exams": sync_exam_time(pool, today, locations, data.get("exam_windows", []), users),
+        "last_day": sync_last_day(pool, today, pairs, users),
         "plague": spread_plague(pool, pairs),
     }
 
@@ -485,6 +548,24 @@ def _cluster_exam_dates(pairs, gap_days=20, start_offset_days=5):
         out.append({"starts_on": first - timedelta(days=start_offset_days),
                     "ends_on": last, "exams": len(cl)})
     out.sort(key=lambda s: s["starts_on"], reverse=True)
+    return out
+
+
+def fetch_exam_windows(client, campus_id, cursus_id=None):
+    """
+    Fenêtres [(begin_dt, end_dt)] des examens du cursus sur le campus — sert au
+    calcul du temps passé en examen (overlap avec les locations).
+    """
+    out = []
+    for e in client.paginate(f"/v2/campus/{campus_id}/exams", page_size=100):
+        cursus_ids = e.get("cursus_ids")
+        if not cursus_ids:
+            cursus_ids = [c.get("id") for c in (e.get("cursus") or [])]
+        if cursus_id and cursus_id not in cursus_ids:
+            continue
+        b, en = _parse(e.get("begin_at")), _parse(e.get("end_at"))
+        if b and en:
+            out.append((b, en))
     return out
 
 

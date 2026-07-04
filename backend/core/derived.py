@@ -14,6 +14,7 @@ from collections import defaultdict
 from datetime import datetime, time as dtime, timedelta
 from decimal import Decimal
 
+from django.db.models import Sum
 from django.utils import timezone
 
 from .engine import record_event
@@ -57,6 +58,63 @@ def assign_daily_designations(pool, day=None, n_cursed=3, n_blessed=3, reseed=Fa
         + [DailyDesignation(pool=pool, user=u, day=day, status="blessed") for u in blessed]
     )
     return {"cursed": [u.login for u in cursed], "blessed": [u.login for u in blessed]}
+
+
+def _rule_params(key):
+    r = Rule.objects.filter(key=key, is_active=True).first()
+    return (r.current_version.params if r and r.current_version else {}) or {}
+
+
+def apply_designation_effects(pool, day):
+    """
+    Donne un EFFET RÉEL aux Maudits/Bénis du jour (avant : purement cosmétique) :
+    Béni → +pct % de ses gains du jour, Maudit → −pct %. Appliqué à la clôture
+    du jour (nightly / rejeu), APRÈS l'ingestion des events. Idempotent
+    (agrégat journalier voidé puis réécrit).
+    """
+    desigs = list(DailyDesignation.objects.filter(pool=pool, day=day).select_related("user"))
+    if not desigs:
+        return 0
+    gains = {r["user_id"]: float(r["s"] or 0) for r in (
+        EventLog.objects.filter(pool=pool, event_date=day, is_voided=False,
+                                raw_points__gt=0)
+        .exclude(event_type__in=("daily_blessed", "daily_cursed", "manual_adjust"))
+        .values("user_id").annotate(s=Sum("raw_points")))}
+    created = 0
+    for des in desigs:
+        blessed = des.status == "blessed"
+        key = "daily_blessed" if blessed else "daily_cursed"
+        pct = float(_rule_params(key).get("pct", 30))
+        base = gains.get(des.user_id, 0.0)
+        pts = round(base * pct / 100, 2)
+        _void_daily(des.user, pool, key, day)
+        if pts <= 0:
+            continue  # rien gagné ce jour → pas d'effet
+        record_event(user=des.user, pool=pool, rule_key=key, occurred_at=_noon(day),
+                     context={"points": pts if blessed else -pts, "pct": pct},
+                     source=SYSTEM)
+        created += 1
+    return created
+
+
+def apply_randominette(pool, day):
+    """
+    Randominette (mécanisme de comeback) : pile ou face quotidien pour la
+    MOITIÉ BASSE du classement (à J-1) — pile +points, face else_points.
+    Dedup par (login, jour) → idempotente au re-sync (pas de re-tirage).
+    """
+    board = standings(pool, include_today=False)  # classement figé à J-1
+    if len(board) < 4:
+        return 0
+    bottom = {r["login"] for r in board[len(board) // 2:]}
+    users = AppUser.objects.filter(pool=pool, is_active=True, login__in=bottom)
+    created = 0
+    for u in users:
+        if record_event(user=u, pool=pool, rule_key="randominette",
+                        occurred_at=_noon(day), context={}, source=SYSTEM,
+                        dedup_key=f"rando:{u.login}:{day.isoformat()}"):
+            created += 1
+    return created
 
 
 def assign_designations(pool, n_cursed=1, n_blessed=1, when=None, seed=None):

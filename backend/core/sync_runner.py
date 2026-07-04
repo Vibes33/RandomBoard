@@ -19,11 +19,12 @@ from django.conf import settings
 from django.utils.text import slugify
 
 from .ft_api import NETWORK_ERRORS, FtRateLimit, FtServerError
-from .models import Pool
+from .models import DailyDesignation, Pool
 from .services import snapshot_day
 from .sync import (
-    fetch_campus_users, fetch_day, sync_evaluations, sync_feedbacks, sync_flags,
-    sync_host_effects, sync_locations, sync_users,
+    fetch_campus_users, fetch_day, fetch_exam_windows, sync_evaluations,
+    sync_exam_time, sync_feedbacks, sync_flags, sync_host_effects, sync_last_day,
+    sync_locations, sync_users,
 )
 
 MONTHS = {m.lower(): i for i, m in enumerate(calendar.month_name) if m}
@@ -118,6 +119,14 @@ def run_full_sync(*, client, pool, campus, cursus, d_from=None, d_to=None,
     from .chaos import seed_plague
     seed_plague(pool)  # jour 1 : Peste & Choléra (4+4) tirés une fois, sans reset
 
+    # Fenêtres d'examen du cursus (1 fetch pour tout le rejeu) → exam_time.
+    try:
+        exam_windows = fetch_exam_windows(client, campus, cursus)
+        log(f"Fenêtres d'examen trouvées : {len(exam_windows)}")
+    except Exception as ex:  # noqa: BLE001
+        exam_windows = []
+        log(f"Examens indisponibles ({ex}) — exam_time ignoré")
+
     for c0 in range(0, total_days, workers):
         if cancel():
             log("Annulation demandée — arrêt du rejeu.")
@@ -149,9 +158,23 @@ def run_full_sync(*, client, pool, campus, cursus, d_from=None, d_to=None,
                  + sync_feedbacks(pool, p["feedbacks"], users)
                  + sync_evaluations(pool, p["evaluations"], users)
                  + sync_flags(pool, p["flags"], users)
-                 + sync_host_effects(pool, d, p["locations"], p.get("pairs", []), users))
+                 + sync_host_effects(pool, d, p["locations"], p.get("pairs", []), users)
+                 + sync_exam_time(pool, d, p["locations"], exam_windows, users)
+                 + sync_last_day(pool, d, p.get("pairs", []), users))
             from .chaos import spread_plague
             spread_plague(pool, p.get("pairs", []))  # propagation Peste & Choléra
+            # Contenu quotidien dérivé — même pipeline que le live (daily_derived
+            # + nightly) : élus du jour, randominette (moitié basse), ancienneté,
+            # aura, puis effets des élus calculés sur les gains du jour.
+            from .derived import (apply_aura_penalty, apply_designation_effects,
+                                  apply_randominette, apply_seniority,
+                                  assign_daily_designations)
+            if not DailyDesignation.objects.filter(pool=pool, day=d).exists():
+                assign_daily_designations(pool, d)  # déterministe par (pool, jour)
+            n += apply_randominette(pool, d)
+            apply_seniority(pool, d)
+            apply_aura_penalty(pool, d)
+            apply_designation_effects(pool, d)
             snapshot_day(pool, d)  # fige le jour, comme le cron de minuit
             total_events += n
             log(f"{d} · {len(p['locations'])} loc / {len(p['feedbacks'])} fb / "

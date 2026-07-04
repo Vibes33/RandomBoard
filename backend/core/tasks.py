@@ -104,10 +104,12 @@ def nightly_snapshot():
     Piscine active, puis verrouille son coefficient. Idempotent & rejouable.
     """
     from .chaos import apply_stacking
+    from .derived import apply_designation_effects
     yesterday = timezone.localdate() - timedelta(days=1)
     summary = {}
     for pool in Pool.objects.filter(is_active=True):
         apply_stacking(pool, yesterday)  # malus stacking sur le jour clôturé (opt-in)
+        apply_designation_effects(pool, yesterday)  # ± % des gains des élus du jour
         count = snapshot_day(pool, yesterday)
         DailyCoefficient.objects.filter(pool=pool, day=yesterday).update(locked=True)
         summary[pool.slug] = count
@@ -125,7 +127,7 @@ def daily_derived():
       puis ancienneté & aura.
     """
     from .chaos import plague_endgame, seed_plague
-    from .derived import (apply_aura_penalty, apply_seniority,
+    from .derived import (apply_aura_penalty, apply_randominette, apply_seniority,
                           assign_daily_designations, randomize_daily_hosts)
     from .services import randomize_day_multipliers
     today = timezone.localdate()
@@ -138,12 +140,13 @@ def daily_derived():
         mults = randomize_day_multipliers(pool, today, reseed=True, only_missing=True)
         hosts = randomize_daily_hosts(pool, today)
         desig = assign_daily_designations(pool, today)   # Maudits/Bénis DU JOUR
+        rando = apply_randominette(pool, today)          # comeback moitié basse
         weeks, _ = apply_seniority(pool)
         auras = apply_aura_penalty(pool)
         entry = {"multiplicateurs": mults,
                  "places": len(hosts["shiny"]) + len(hosts["cursed"]),
                  "designations": len(desig["cursed"]) + len(desig["blessed"]),
-                 "semaines": weeks, "auras": auras}
+                 "randominette": rando, "semaines": weeks, "auras": auras}
         # boost Peste & Choléra : 1 jour avant l'exam final
         if today == pool.ends_on - timedelta(days=1):
             entry["plague_endgame"] = plague_endgame(pool)
@@ -162,6 +165,7 @@ def poll_42():
     Les jours passés restent figés (snapshots) ; nightly_snapshot clôt la veille.
     No-op sans clés API.
     """
+    from .sync import fetch_exam_windows
     client = FtClient()
     if not client.configured:
         return {"skipped": "aucune clé API configurée"}
@@ -172,7 +176,13 @@ def poll_42():
         if not (pool.starts_on <= today <= pool.ends_on):
             out[pool.slug] = "hors période — ignoré"
             continue
-        data = fetch_live(client, campus_id=settings.FT_CAMPUS_ID, cursus_id=settings.FT_CURSUS_ID)
+        campus = pool.campus_id or settings.FT_CAMPUS_ID
+        cursus = pool.cursus_id or settings.FT_CURSUS_ID
+        data = fetch_live(client, campus_id=campus, cursus_id=cursus)
+        try:
+            data["exam_windows"] = fetch_exam_windows(client, campus, cursus)
+        except Exception:  # noqa: BLE001 — exam_time ignoré si l'endpoint échoue
+            data["exam_windows"] = []
         out[pool.slug] = sync_all(pool, data)
     return out
 

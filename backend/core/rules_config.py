@@ -32,12 +32,19 @@ RULES = [
      {"type": "threshold_window", "value_key": "duration_min", "lo": 30, "hi": 60,
       "in_points": 0, "out_points": -80}),
     ("exam_time", "gain", "Temps passé en examen",
-     {"type": "linear_growth", "value_key": "minutes", "min": 0, "max": 240, "max_points": 300}),
+     {"type": "linear_growth", "value_key": "minutes", "min": 0, "max": 240,
+      "max_points": 300}),
+    # Élus du jour (DailyDesignation) : ±pct % des gains du jour, appliqué à la
+    # clôture. Le pct vit ici (éditable panel), le montant est calculé au vol.
+    ("daily_blessed", "gain", "Béni du jour : bonus % des gains du jour",
+     {"type": "from_context", "value_key": "points", "pct": 30}),
+    ("daily_cursed", "loss", "Maudit du jour : malus % des gains du jour",
+     {"type": "from_context", "value_key": "points", "pct": 30}),
     ("midnight_bonus", "gain", "Logtime quasi-plein (paliers : 20h / 23h50)",
      {"type": "tiers", "value_key": "minutes", "default": 0,
       "tiers": {"1200": 100, "1430": 300}}),
-    ("randominette", "event", "Randominette (pile ou face)",
-     {"type": "probability", "proba": 0.5, "points": 150, "else_points": -50}),
+    ("randominette", "event", "Randominette (pile ou face, moitié basse du classement)",
+     {"type": "probability", "proba": 0.5, "points": 150, "else_points": -25}),
     ("kw_quoi_sans_feur", "loss", 'Feedback "quoi" sans "feur" / "coubeh"',
      {"type": "fixed", "min": -50, "max": -30, "rank_penalty": 1}),
     ("reconnect_same_pc", "loss", "Reco sur le MÊME pc dans la journée",
@@ -47,8 +54,8 @@ RULES = [
       "max_malus": -300}),
     ("aura_first_coalition", "loss", "1er de sa coalition (perte d'aura)",
      {"type": "fixed", "min": -1200, "max": -800}),
-    ("last_day_corrections", "event", "Dernier jour : corrections × 1000",
-     {"type": "multiplier", "value_key": "correction_points", "factor": 1000}),
+    ("last_day_corrections", "event", "Dernier jour : points par correction donnée",
+     {"type": "multiplier", "value_key": "correction_points", "factor": 100}),
     # ─── règles avancées (contextuelles) ───
     ("shiny_host", "gain", "Place Bénite (Shiny) — bonus à la connexion",
      {"type": "fixed", "min": 150, "max": 300}),
@@ -95,7 +102,8 @@ RULES = [
     ("project_perfect", "gain", "Projet validé pile à 100 (bonus)",
      {"type": "fixed", "points": 150}),
     ("cluster_bonus", "event", "Bonus/malus selon le cluster où l'élève est assis",
-     {"type": "map_lookup", "key_field": "cluster", "default": 0, "map": {}}),
+     {"type": "map_lookup", "key_field": "cluster", "default": 0,
+      "map": {"c1": 15, "c2": 0, "c3": -10}}),
     # ─── chaos absolu (étape 4.2) : montants portés par PoolConfig ───
     ("stacking_penalty", "loss", "Stacking : malus si on ne corrige pas",
      {"type": "from_context", "value_key": "points"}),
@@ -112,9 +120,11 @@ RULES = [
 # ─────────────────────────────────────────────────────────────────────
 INACTIVE_RULES = {
     "kw_quoi_feur", "kw_quoi_sans_feur",   # doublons de feedback_keywords
-    "curl_leaderboard",                    # aucun point attribué
-    "randominette", "exam_time", "last_day_corrections",  # jamais émises
+    "curl_leaderboard",                    # inattribuable (pas d'auth sur le curl)
     "config_weekend", "config_daily",      # porte-config de l'ancien modèle
+    # randominette / exam_time / last_day_corrections : RÉACTIVÉES (audit 07/2026)
+    # et câblées — randominette moitié basse, exam via overlap locations,
+    # last_day via corrections données le dernier jour.
 }
 
 
@@ -168,6 +178,15 @@ RULE_FIELDS = {
     "project_perfect": [_f("points", "Bonus (note = 100)")],
     "cluster_bonus": [_f("map", "Cluster → points", "map"),
                       _f("default", "Points par défaut")],
+    "randominette": [_f("proba", "Probabilité de gagner", "proba"),
+                     _f("points", "Points si gagné"),
+                     _f("else_points", "Points si perdu")],
+    "exam_time": [_f("min", "Minutes — borne basse", "value"),
+                  _f("max", "Minutes — borne haute", "value"),
+                  _f("max_points", "Points maximum")],
+    "last_day_corrections": [_f("factor", "Points par correction donnée")],
+    "daily_blessed": [_f("pct", "% des gains du jour", "value")],
+    "daily_cursed": [_f("pct", "% des gains du jour", "value")],
     "manual_adjust": [],  # points fournis à la main au moment de l'ajustement
     # Montants gérés par PoolConfig (onglet Chaos), pas de champ ici.
     "stacking_penalty": [],
