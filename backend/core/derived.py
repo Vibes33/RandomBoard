@@ -255,11 +255,22 @@ def apply_aura_penalty(pool, day=None):
 # Malus d'ancienneté (croît avec les semaines de Piscine)
 # ─────────────────────────────────────────────────────────────
 def apply_seniority(pool, day=None):
+    """
+    Malus d'ancienneté — UNIQUEMENT pour les étudiants PRÉSENTS ce jour-là
+    (avant : il frappait aussi les absents, qui coulaient à −1800 sans jamais
+    venir). Doit être appliqué à la CLÔTURE du jour (présence connue) :
+    nightly_snapshot en live, pipeline quotidien en rejeu.
+    """
     day = day or timezone.localdate()
     weeks = max(0, (day - pool.starts_on).days // 7)
+    present = set(EventLog.objects.filter(
+        pool=pool, event_date=day, event_type="logtime_low", is_voided=False
+    ).values_list("user_id", flat=True))
     created = 0
     for u in AppUser.objects.filter(pool=pool, is_active=True):
-        _void_daily(u, pool, "seniority_malus", day)
+        _void_daily(u, pool, "seniority_malus", day)  # nettoie aussi les absents
+        if u.id not in present:
+            continue
         record_event(user=u, pool=pool, rule_key="seniority_malus", occurred_at=_noon(day),
                      context={"weeks": weeks}, source=SYSTEM)
         created += 1

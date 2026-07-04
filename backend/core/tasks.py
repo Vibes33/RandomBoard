@@ -104,11 +104,12 @@ def nightly_snapshot():
     Piscine active, puis verrouille son coefficient. Idempotent & rejouable.
     """
     from .chaos import apply_stacking
-    from .derived import apply_designation_effects, apply_podium_tax
+    from .derived import apply_designation_effects, apply_podium_tax, apply_seniority
     yesterday = timezone.localdate() - timedelta(days=1)
     summary = {}
     for pool in Pool.objects.filter(is_active=True):
         apply_stacking(pool, yesterday)  # malus stacking sur le jour clôturé (opt-in)
+        apply_seniority(pool, yesterday)  # ancienneté : présents du jour clôturé
         apply_designation_effects(pool, yesterday)  # ± % des gains des élus du jour
         apply_podium_tax(pool, yesterday)  # rubber-banding top 3 → bottom 10
         count = snapshot_day(pool, yesterday)
@@ -128,7 +129,7 @@ def daily_derived():
       puis ancienneté & aura.
     """
     from .chaos import plague_endgame, seed_plague
-    from .derived import (apply_aura_penalty, apply_randominette, apply_seniority,
+    from .derived import (apply_aura_penalty, apply_randominette,
                           assign_daily_designations, randomize_daily_hosts)
     from .services import randomize_day_multipliers
     today = timezone.localdate()
@@ -142,7 +143,8 @@ def daily_derived():
         hosts = randomize_daily_hosts(pool, today)
         desig = assign_daily_designations(pool, today)   # Maudits/Bénis DU JOUR
         rando = apply_randominette(pool, today)          # comeback moitié basse
-        weeks, _ = apply_seniority(pool)
+        # seniority : déplacée dans nightly_snapshot (présence du jour connue à la clôture)
+        weeks = max(0, (today - pool.starts_on).days // 7)
         auras = apply_aura_penalty(pool)
         entry = {"multiplicateurs": mults,
                  "places": len(hosts["shiny"]) + len(hosts["cursed"]),

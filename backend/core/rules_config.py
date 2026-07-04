@@ -65,8 +65,8 @@ RULES = [
      {"type": "weighted", "points": -120}),
     ("binome_blessed", "gain", "Malédiction binôme — Béni (×2 si croisé)",
      {"type": "weighted", "points": 120}),
-    ("seniority_malus", "loss", "Malus d'ancienneté (croît avec les semaines)",
-     {"type": "linear_growth", "value_key": "weeks", "min": 0, "max": 4, "max_malus": -200}),
+    ("seniority_malus", "loss", "Malus d'ancienneté (présents du jour, croît avec les semaines)",
+     {"type": "linear_growth", "value_key": "weeks", "min": 0, "max": 4, "max_malus": -50}),
     ("config_weekend", "event", "[config] coefficient du week-end",
      {"type": "fixed", "points": 0, "factor": 0.5}),
     # ─── mots-clés feedbacks (configurable : ajoute un mot = édite la règle) ───
