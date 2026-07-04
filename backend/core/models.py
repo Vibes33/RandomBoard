@@ -450,7 +450,7 @@ class PoolConfig(models.Model):
     # Peste & Choléra : boost versé 1 jour avant l'exam final à la coalition la
     # plus nombreuse — X points PAR PERSONNE (seul réglage).
     plague_seeded = models.BooleanField(default=False)
-    plague_payout = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal("300"))
+    plague_payout = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal("400"))
 
     def __str__(self):
         return f"Config · {self.pool.slug}"

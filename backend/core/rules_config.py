@@ -104,6 +104,11 @@ RULES = [
     ("cluster_bonus", "event", "Bonus/malus selon le cluster où l'élève est assis",
      {"type": "map_lookup", "key_field": "cluster", "default": 0,
       "map": {"c1": 15, "c2": 0, "c3": -10}}),
+    # ─── rubber-banding : le podium finance les derniers (zéro-somme) ───
+    ("podium_tax", "loss", "Taxe du podium : top 3 du jour, % des gains",
+     {"type": "from_context", "value_key": "points", "pct": 5, "top": 3, "bottom": 10}),
+    ("comeback_boost", "gain", "Boost comeback : la taxe du podium, redistribuée",
+     {"type": "from_context", "value_key": "points"}),
     # ─── chaos absolu (étape 4.2) : montants portés par PoolConfig ───
     ("stacking_penalty", "loss", "Stacking : malus si on ne corrige pas",
      {"type": "from_context", "value_key": "points"}),
@@ -187,6 +192,10 @@ RULE_FIELDS = {
     "last_day_corrections": [_f("factor", "Points par correction donnée")],
     "daily_blessed": [_f("pct", "% des gains du jour", "value")],
     "daily_cursed": [_f("pct", "% des gains du jour", "value")],
+    "podium_tax": [_f("pct", "% des gains du jour taxé", "value"),
+                   _f("top", "Nb de taxés (tête)", "value"),
+                   _f("bottom", "Nb de bénéficiaires (queue)", "value")],
+    "comeback_boost": [],  # montant = taxe collectée, réparti automatiquement
     "manual_adjust": [],  # points fournis à la main au moment de l'ajustement
     # Montants gérés par PoolConfig (onglet Chaos), pas de champ ici.
     "stacking_penalty": [],

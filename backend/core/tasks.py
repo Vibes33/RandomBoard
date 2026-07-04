@@ -104,12 +104,13 @@ def nightly_snapshot():
     Piscine active, puis verrouille son coefficient. Idempotent & rejouable.
     """
     from .chaos import apply_stacking
-    from .derived import apply_designation_effects
+    from .derived import apply_designation_effects, apply_podium_tax
     yesterday = timezone.localdate() - timedelta(days=1)
     summary = {}
     for pool in Pool.objects.filter(is_active=True):
         apply_stacking(pool, yesterday)  # malus stacking sur le jour clôturé (opt-in)
         apply_designation_effects(pool, yesterday)  # ± % des gains des élus du jour
+        apply_podium_tax(pool, yesterday)  # rubber-banding top 3 → bottom 10
         count = snapshot_day(pool, yesterday)
         DailyCoefficient.objects.filter(pool=pool, day=yesterday).update(locked=True)
         summary[pool.slug] = count

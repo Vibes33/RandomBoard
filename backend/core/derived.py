@@ -75,11 +75,7 @@ def apply_designation_effects(pool, day):
     desigs = list(DailyDesignation.objects.filter(pool=pool, day=day).select_related("user"))
     if not desigs:
         return 0
-    gains = {r["user_id"]: float(r["s"] or 0) for r in (
-        EventLog.objects.filter(pool=pool, event_date=day, is_voided=False,
-                                raw_points__gt=0)
-        .exclude(event_type__in=("daily_blessed", "daily_cursed", "manual_adjust"))
-        .values("user_id").annotate(s=Sum("raw_points")))}
+    gains = _day_gains(pool, day)
     created = 0
     for des in desigs:
         blessed = des.status == "blessed"
@@ -93,6 +89,68 @@ def apply_designation_effects(pool, day):
         record_event(user=des.user, pool=pool, rule_key=key, occurred_at=_noon(day),
                      context={"points": pts if blessed else -pts, "pct": pct},
                      source=SYSTEM)
+        created += 1
+    return created
+
+
+# Events « de clôture » exclus de l'assiette des gains du jour (élus, taxe…)
+_CLOSING_EVENTS = ("daily_blessed", "daily_cursed", "podium_tax", "comeback_boost",
+                   "manual_adjust", "stacking_penalty", "plague_payout")
+
+
+def _day_gains(pool, day):
+    """{user_id: gains BRUTS du jour} (events réels uniquement, hors clôture)."""
+    return {r["user_id"]: float(r["s"] or 0) for r in (
+        EventLog.objects.filter(pool=pool, event_date=day, is_voided=False,
+                                raw_points__gt=0)
+        .exclude(event_type__in=_CLOSING_EVENTS)
+        .values("user_id").annotate(s=Sum("raw_points")))}
+
+
+def apply_podium_tax(pool, day):
+    """
+    Rubber-banding zéro-somme : le TOP `top` du classement (à J-1) rend pct %
+    de ses gains DU JOUR, redistribués à parts égales aux `bottom` derniers.
+    La compétition reste serrée sans jamais punir la performance du jour
+    au-delà d'un pourcentage. Idempotent (agrégats journaliers réécrits).
+    """
+    params = _rule_params("podium_tax")
+    if not params:
+        return 0
+    pct = float(params.get("pct", 5))
+    nb_top, nb_bottom = int(params.get("top", 3)), int(params.get("bottom", 10))
+    board = standings(pool, include_today=False)  # classement figé à J-1
+    if pct <= 0 or len(board) < nb_top + nb_bottom:
+        return 0
+    top_logins = [r["login"] for r in board[:nb_top]]
+    bottom_logins = [r["login"] for r in board[-nb_bottom:]]
+    users = {u.login: u for u in AppUser.objects.filter(
+        pool=pool, login__in=set(top_logins) | set(bottom_logins))}
+    gains = _day_gains(pool, day)
+
+    collected, created = 0.0, 0
+    for lg in top_logins:
+        u = users.get(lg)
+        if not u:
+            continue
+        tax = round(gains.get(u.id, 0.0) * pct / 100, 2)
+        _void_daily(u, pool, "podium_tax", day)
+        if tax <= 0:
+            continue
+        record_event(user=u, pool=pool, rule_key="podium_tax", occurred_at=_noon(day),
+                     context={"points": -tax, "pct": pct}, source=SYSTEM)
+        collected += tax
+        created += 1
+    if collected <= 0:
+        return created
+    share = round(collected / nb_bottom, 2)
+    for lg in bottom_logins:
+        u = users.get(lg)
+        if not u:
+            continue
+        _void_daily(u, pool, "comeback_boost", day)
+        record_event(user=u, pool=pool, rule_key="comeback_boost", occurred_at=_noon(day),
+                     context={"points": share, "from": "podium_tax"}, source=SYSTEM)
         created += 1
     return created
 
