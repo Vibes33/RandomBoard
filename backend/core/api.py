@@ -287,6 +287,8 @@ def _log_detail(event, rule_label, mult, final):
         bits.append(f"note {ctx['mark']}")
     if ctx.get("duration_min") is not None:
         bits.append(f"éval en {ctx['duration_min']} min")
+    if ctx.get("host"):
+        bits.append(f"place {ctx['host']}")
     if ctx.get("corrector"):
         bits.append(f"correcteur sur place spéciale : {ctx['corrector']}")
     if ctx.get("project"):

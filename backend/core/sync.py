@@ -275,44 +275,44 @@ def sync_flags(pool, flags, users=None):
     return created
 
 
-def sync_host_effects(pool, day, locations, pairs, users=None):
+def sync_host_effects(pool, day, locations, pairs=None, users=None):
     """
-    Places Bénites/Maudites — bonne cible : l'étudiant ASSIS sur une place
-    shiny/cursed est un « host ». Quand il CORRIGE quelqu'un, c'est le CORRIGÉ
-    qui reçoit le bonus/malus (pas le correcteur). On croise donc les places du
-    jour avec les couples de correction du jour.
+    Places Bénites/Maudites, effet « à la connexion » : l'étudiant qui S'ASSOIT
+    (se connecte) sur une place shiny/cursed du jour reçoit le bonus/malus.
+
+    UNE SEULE FOIS par personne et par jour : se déconnecter puis se reconnecter
+    sur la même place (ou sur une autre place du même type) ne redonne pas de
+    points. Le dedup_key `{tag}:{login}:{jour}` fige le premier effet du jour.
+    `pairs` n'est plus utilisé (effet lié à la présence, pas à la correction) mais
+    reste dans la signature pour les appelants existants.
     """
     users = users or _users(pool)
     kinds = {dh.hostname: dh.kind for dh in DailyHost.objects.filter(pool=pool, day=day)}
     if not kinds:
         return 0
-    # étudiants assis sur une place shiny / cursed ce jour-là
-    shiny_students, cursed_students = set(), set()
+    # première place spéciale sur laquelle chaque étudiant s'est assis ce jour-là
+    shiny_host_of, cursed_host_of = {}, {}
     for loc in locations:
-        k = kinds.get(loc.get("host") or "")
         login = loc.get("login")
-        if not login:
+        k = kinds.get(loc.get("host") or "")
+        if not login or not k:
             continue
-        if k == "shiny":
-            shiny_students.add(login)
-        elif k == "cursed":
-            cursed_students.add(login)
+        if k == "shiny" and login not in shiny_host_of:
+            shiny_host_of[login] = loc.get("host")
+        elif k == "cursed" and login not in cursed_host_of:
+            cursed_host_of[login] = loc.get("host")
 
     occurred = timezone.make_aware(datetime.combine(day, dtime(12, 0)))
     created = 0
-    for corrector, corrected, sid in pairs:
-        cu = users.get(corrected)
-        if not cu:
+    seats = ([("shiny_host", "shinyhost", lg, h) for lg, h in shiny_host_of.items()]
+             + [("cursed_host", "cursedhost", lg, h) for lg, h in cursed_host_of.items()])
+    for rule_key, tag, login, host in seats:
+        u = users.get(login)
+        if not u:
             continue
-        if corrector in shiny_students:
-            rule_key, tag = "shiny_host", "shinyhost"
-        elif corrector in cursed_students:
-            rule_key, tag = "cursed_host", "cursedhost"
-        else:
-            continue
-        if record_event(user=cu, pool=pool, rule_key=rule_key, occurred_at=occurred,
-                        context={"corrector": corrector}, source=API,
-                        dedup_key=f"{tag}:{sid}:{corrected}"):
+        if record_event(user=u, pool=pool, rule_key=rule_key, occurred_at=occurred,
+                        context={"host": host}, source=API,
+                        dedup_key=f"{tag}:{login}:{day.isoformat()}"):
             created += 1
     return created
 
