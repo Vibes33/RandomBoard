@@ -115,13 +115,6 @@ def nightly_snapshot():
 
 
 @shared_task
-def weekly_designations():
-    """Désigne les Maudits/Bénis de la semaine pour chaque Piscine active."""
-    from .derived import assign_designations
-    return {p.slug: assign_designations(p) for p in Pool.objects.filter(is_active=True)}
-
-
-@shared_task
 def daily_derived():
     """
     Tirages AUTOMATIQUES du jour (cron 00:06) pour la piscine active, dans sa
@@ -132,7 +125,8 @@ def daily_derived():
       puis ancienneté & aura.
     """
     from .chaos import plague_endgame, seed_plague
-    from .derived import apply_aura_penalty, apply_seniority, randomize_daily_hosts
+    from .derived import (apply_aura_penalty, apply_seniority,
+                          assign_daily_designations, randomize_daily_hosts)
     from .services import randomize_day_multipliers
     today = timezone.localdate()
     out = {}
@@ -143,10 +137,12 @@ def daily_derived():
         seed_plague(pool)  # jour 1 : sème l'épidémie une seule fois (idempotent)
         mults = randomize_day_multipliers(pool, today, reseed=True, only_missing=True)
         hosts = randomize_daily_hosts(pool, today)
+        desig = assign_daily_designations(pool, today)   # Maudits/Bénis DU JOUR
         weeks, _ = apply_seniority(pool)
         auras = apply_aura_penalty(pool)
         entry = {"multiplicateurs": mults,
                  "places": len(hosts["shiny"]) + len(hosts["cursed"]),
+                 "designations": len(desig["cursed"]) + len(desig["blessed"]),
                  "semaines": weeks, "auras": auras}
         # boost Peste & Choléra : 1 jour avant l'exam final
         if today == pool.ends_on - timedelta(days=1):

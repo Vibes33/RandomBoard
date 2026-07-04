@@ -132,7 +132,6 @@
     <div class="logo">⚡</div>
     <div><h1>Chaos 42 — Panel Admin</h1><p>{{ pool.name|default:"Aucune piscine active" }} · {{ pool_period }}</p></div>
     <div class="grow"></div>
-    <a class="lnk" href="/dashboard/">📊 Dashboard</a>
     <form method="post" action="/panel/logout/" style="margin:0">{% csrf_token %}
       <button class="lnk" type="submit" style="background:var(--panel)">⎋ Déconnexion</button></form>
   </header>
@@ -235,15 +234,14 @@
       </div>
     </div>
 
-    <div class="sec" style="margin-top:22px">Étudiants désignés de la semaine
-      <span class="calc" id="desig-week"></span></div>
+    <div class="sec" style="margin-top:22px">✨ Les élus du jour <span class="calc" id="desig-day"></span></div>
     <div class="cols">
       <div class="card">
-        <div class="hdr" style="color:var(--gold)">✦ Bénis</div>
+        <div class="hdr" style="color:var(--gold)">✦ Bénis du jour</div>
         <div id="d-blessed"><div class="spin">Chargement…</div></div>
       </div>
       <div class="card">
-        <div class="hdr" style="color:var(--red)">☠ Maudits</div>
+        <div class="hdr" style="color:var(--red)">☠ Maudits du jour</div>
         <div id="d-cursed"><div class="spin">Chargement…</div></div>
       </div>
     </div>
@@ -561,10 +559,10 @@ async function loadHosts(){
   const row=h=>`<div class="host"><span class="hn">${h}</span></div>`;
   $('#h-shiny').innerHTML=d.shiny&&d.shiny.length?d.shiny.map(row).join(''):'<div class="empty">Aucune — lance un tirage 🎲</div>';
   $('#h-cursed').innerHTML=d.cursed&&d.cursed.length?d.cursed.map(row).join(''):'<div class="empty">Aucune — lance un tirage 🎲</div>';
-  // Étudiants désignés Maudits/Bénis de la semaine
-  $('#desig-week').textContent=d.week_start?('semaine du '+d.week_start):'';
-  $('#d-blessed').innerHTML=d.blessed&&d.blessed.length?d.blessed.map(row).join(''):'<div class="empty">Aucun cette semaine.</div>';
-  $('#d-cursed').innerHTML=d.cursed_users&&d.cursed_users.length?d.cursed_users.map(row).join(''):'<div class="empty">Aucun cette semaine.</div>';
+  // Étudiants Maudits/Bénis DU JOUR
+  $('#desig-day').textContent=d.date?('· '+d.date):'';
+  $('#d-blessed').innerHTML=d.blessed&&d.blessed.length?d.blessed.map(row).join(''):'<div class="empty">Aucun ce jour (lance un tirage 🎲).</div>';
+  $('#d-cursed').innerHTML=d.cursed_users&&d.cursed_users.length?d.cursed_users.map(row).join(''):'<div class="empty">Aucun ce jour (lance un tirage 🎲).</div>';
 }
 
 /* ── 6. Synchronisation API ── */

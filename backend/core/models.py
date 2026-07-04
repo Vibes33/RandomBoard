@@ -492,3 +492,25 @@ class StackLedger(models.Model):
 
     def __str__(self):
         return f"{self.user.login} · stack {self.total_stacked}"
+
+
+class DailyDesignation(models.Model):
+    """Étudiants Maudits / Bénis tirés au sort CHAQUE JOUR (les élus du jour)."""
+
+    class Status(models.TextChoices):
+        CURSED = "cursed", "Maudit"
+        BLESSED = "blessed", "Béni"
+
+    pool = models.ForeignKey(Pool, on_delete=models.CASCADE, related_name="daily_designations")
+    user = models.ForeignKey(AppUser, on_delete=models.CASCADE, related_name="daily_designations")
+    day = models.DateField()
+    status = models.CharField(max_length=8, choices=Status.choices)
+
+    class Meta:
+        verbose_name = "Désignation du jour"
+        verbose_name_plural = "Désignations du jour"
+        unique_together = ("pool", "user", "day")
+        ordering = ("-day", "status")
+
+    def __str__(self):
+        return f"{self.day} · {self.user.login} · {self.status}"

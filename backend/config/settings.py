@@ -104,10 +104,6 @@ CELERY_BEAT_SCHEDULE = {
         "task": "core.tasks.sync_campus_users",
         "schedule": crontab(hour=6, minute=0),  # 1×/jour : actualise la liste des étudiants
     },
-    "weekly-designations": {
-        "task": "core.tasks.weekly_designations",
-        "schedule": crontab(day_of_week=1, hour=0, minute=10),  # lundi 00:10
-    },
     "daily-derived": {
         "task": "core.tasks.daily_derived",
         "schedule": crontab(hour=0, minute=6),  # aura / ancienneté / week-end

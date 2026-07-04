@@ -2,7 +2,7 @@ from django.contrib.auth import views as auth_views
 from django.urls import path
 from django.views.generic import RedirectView
 from core import api
-from core.views import dashboard, healthz, leaderboard_preview
+from core.views import healthz, leaderboard_preview
 
 urlpatterns = [
     path("", RedirectView.as_view(url="/panel/", permanent=False)),
@@ -10,7 +10,6 @@ urlpatterns = [
     path("panel/login/", auth_views.LoginView.as_view(
         template_name="core/login.html", redirect_authenticated_user=True), name="login"),
     path("panel/logout/", auth_views.LogoutView.as_view(next_page="/panel/login/"), name="logout"),
-    path("dashboard/", dashboard, name="dashboard"),
     path("panel/", api.panel, name="panel"),
     path("panel/api/pools", api.api_pools),
     path("panel/api/pools/create", api.api_pool_create),

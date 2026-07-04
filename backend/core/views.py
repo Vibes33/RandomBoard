@@ -2,21 +2,12 @@
 Vues HTTP du Chaos Leaderboard 42.
 
 - healthz : sonde de vie.
-- leaderboard_preview : aperçu curl-able (texte brut).
-- dashboard : back-office visuel staff-only (KPI + graphes, stats live).
-  La VRAIE logique de score (snapshots) arrive à l'étape 3 ; ici on présente
-  un aperçu honnête basé sur les points BRUTS (hors coefficient journalier).
+- leaderboard_preview : classement curl-able (texte brut ANSI).
 """
-import json
-from datetime import timedelta
-
-from django.db.models import Count, Max, Min, Sum
 from django.http import HttpResponse, JsonResponse
-from django.shortcuts import render
 from django.utils import timezone
 
-from .auth import staff_required
-from .models import AppUser, CurlTracking, EventLog, Pool, Rule
+from .models import CurlTracking, Pool
 from .services import standings
 
 
@@ -121,95 +112,3 @@ def leaderboard_preview(request):
     colored = "plain" not in request.GET  # curl ...?plain pour couper les couleurs
     body = _render_board(pool, board, colored=colored)
     return HttpResponse(body, content_type="text/plain; charset=utf-8")
-
-
-@staff_required
-def dashboard(request):
-    """Back-office visuel : KPI + graphes, alimentés par la base en temps réel."""
-    today = timezone.localdate()
-    pool = Pool.objects.filter(is_active=True).order_by("-starts_on").first()
-
-    events = EventLog.objects.filter(is_voided=False)
-    if pool:
-        events = events.filter(pool=pool)
-
-    # ─── KPI (relatifs à la piscine, pas à "aujourd'hui") ───
-    total_students = AppUser.objects.filter(pool=pool).count() if pool else 0
-    events_total = events.count()
-    raw_total = float(events.aggregate(s=Sum("raw_points"))["s"] or 0)
-    active_rules = Rule.objects.filter(is_active=True).count()
-
-    bounds = events.aggregate(mn=Min("event_date"), mx=Max("event_date"))
-    first_day, last_day = bounds["mn"], bounds["mx"]
-    days_active = events.values("event_date").distinct().count()
-    active_users = events.values("user").distinct().count()
-    active_pct = round(100 * active_users / total_students) if total_students else 0
-
-    # ─── Classement (top 8 + lanterne rouge) ───
-    board = standings(pool, include_today=True) if pool else []
-    leaders = [{"login": r["login"], "pts": r["total"]} for r in board[:8]]
-    losers = [{"login": r["login"], "pts": r["total"]} for r in board[-3:][::-1]]
-
-    # ─── Events par type ───
-    by_type = [
-        {"label": r["event_type"], "value": r["c"]}
-        for r in events.values("event_type").annotate(c=Count("id")).order_by("-c")[:7]
-    ]
-
-    # ─── Points par catégorie de règle (gains vs pertes) ───
-    rule_cat = {rl.key: rl.category for rl in Rule.objects.all()}
-    cat_pts = {"gain": 0.0, "loss": 0.0, "event": 0.0}
-    for r in events.values("event_type").annotate(s=Sum("raw_points")):
-        cat = rule_cat.get(r["event_type"])
-        pts = float(r["s"] or 0)
-        if cat in cat_pts:
-            cat_pts[cat] += pts
-        elif pts >= 0:
-            cat_pts["gain"] += pts
-        else:
-            cat_pts["loss"] += pts
-    categories = [
-        {"label": "Gains", "value": round(cat_pts["gain"]), "color": "#8fe03a"},
-        {"label": "Pertes", "value": round(abs(cat_pts["loss"])), "color": "#ff5a5a"},
-        {"label": "Events", "value": round(abs(cat_pts["event"])), "color": "#4aa3ff"},
-    ]
-
-    # ─── Séries temporelles sur la PLAGE de la piscine ───
-    ev_map = {r["event_date"]: r["c"] for r in events.values("event_date").annotate(c=Count("id"))}
-    pt_map = {r["event_date"]: float(r["s"] or 0)
-              for r in events.values("event_date").annotate(s=Sum("raw_points"))}
-    events_per_day, points_per_day = [], []
-    if first_day and last_day:
-        span = min((last_day - first_day).days + 1, 40)  # borne de sécurité
-        for i in range(span):
-            d = first_day + timedelta(days=i)
-            events_per_day.append({"label": d.strftime("%d/%m"), "value": ev_map.get(d, 0)})
-            points_per_day.append({"label": d.strftime("%d/%m"), "value": round(pt_map.get(d, 0))})
-
-    bundle = {
-        "leaders": leaders,
-        "losers": losers,
-        "by_type": by_type,
-        "categories": categories,
-        "events_per_day": events_per_day,
-        "points_per_day": points_per_day,
-        "gauge": {"label": "Étudiants actifs", "value": active_pct,
-                  "sub": f"{active_users}/{total_students}"},
-    }
-
-    period = (f"{first_day:%d/%m} → {last_day:%d/%m}" if first_day else "—")
-    context = {
-        "pool": pool,
-        "period": period,
-        "kpis": [
-            {"label": "Étudiants", "value": total_students, "unit": "", "accent": "blue"},
-            {"label": "Events", "value": events_total, "unit": "", "accent": "green"},
-            {"label": "Points bruts cumulés", "value": round(raw_total), "unit": "pts", "accent": "green"},
-            {"label": "Jours actifs", "value": days_active, "unit": "j", "accent": "orange"},
-            {"label": "Règles actives", "value": active_rules, "unit": "", "accent": "blue"},
-        ],
-        "events_total": events_total,
-        "raw_total": round(raw_total),
-        "bundle_json": json.dumps(bundle),
-    }
-    return render(request, "core/dashboard.html", context)

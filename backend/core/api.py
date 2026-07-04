@@ -24,8 +24,8 @@ from .auth import staff_required
 from .derived import randomize_daily_hosts
 from .engine import new_rule_version
 from .models import (
-    AppUser, DailyEventMultiplier, DailyHost, EventLog, Pool, Rule, SyncRun,
-    WeeklyDesignation, Workstation,
+    AppUser, DailyDesignation, DailyEventMultiplier, DailyHost, EventLog, Pool,
+    Rule, SyncRun, Workstation,
 )
 from .services import (
     adjust_user_score, day_multipliers, randomize_day_multipliers,
@@ -416,12 +416,14 @@ def api_hosts(request):
         return JsonResponse({"days": [], "shiny": [], "cursed": []})
 
     if request.method == "POST":
+        from .derived import assign_daily_designations
         data = _json(request)
         try:
             day = date.fromisoformat(data.get("date", ""))
         except ValueError:
             return HttpResponseBadRequest("Date invalide.")
         randomize_daily_hosts(pool, day, reseed=True)
+        assign_daily_designations(pool, day, reseed=True)  # re-tire aussi les élus du jour
         return JsonResponse({"ok": True})
 
     days, d = [], pool.starts_on
@@ -436,11 +438,8 @@ def api_hosts(request):
         out["date"] = date_str
         out["shiny"] = sorted(h.hostname for h in dh if h.kind == "shiny")
         out["cursed"] = sorted(h.hostname for h in dh if h.kind == "cursed")
-        # Étudiants désignés Maudits/Bénis de la semaine (WeeklyDesignation)
-        ws = day - timedelta(days=day.weekday())
-        desigs = (WeeklyDesignation.objects.filter(pool=pool, week_start=ws)
-                  .select_related("user"))
-        out["week_start"] = str(ws)
+        # Étudiants Maudits/Bénis DU JOUR (tirage quotidien)
+        desigs = DailyDesignation.objects.filter(pool=pool, day=day).select_related("user")
         out["blessed"] = sorted(d.user.login for d in desigs if d.status == "blessed")
         out["cursed_users"] = sorted(d.user.login for d in desigs if d.status == "cursed")
     return JsonResponse(out)

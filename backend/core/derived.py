@@ -18,7 +18,8 @@ from django.utils import timezone
 
 from .engine import record_event
 from .models import (
-    AppUser, DailyCoefficient, DailyHost, EventLog, Rule, WeeklyDesignation, Workstation,
+    AppUser, DailyCoefficient, DailyDesignation, DailyHost, EventLog, Rule,
+    WeeklyDesignation, Workstation,
 )
 from .services import standings
 from .sync import _void_daily
@@ -38,8 +39,29 @@ def _noon(day):
 # ─────────────────────────────────────────────────────────────
 # Malédiction des binômes
 # ─────────────────────────────────────────────────────────────
+def assign_daily_designations(pool, day=None, n_cursed=3, n_blessed=3, reseed=False):
+    """
+    Tire au sort CHAQUE JOUR les étudiants Maudits / Bénis du jour.
+    reseed=False → déterministe par (pool, jour) donc idempotent pour la tâche
+    de nuit ; reseed=True → nouveau tirage (action manuelle du panel).
+    """
+    day = day or timezone.localdate()
+    users = list(AppUser.objects.filter(pool=pool, is_active=True))
+    rng = random.Random(None if reseed else f"{pool.slug}:{day.isoformat()}:designations")
+    rng.shuffle(users)
+    cursed, blessed = users[:n_cursed], users[n_cursed:n_cursed + n_blessed]
+
+    DailyDesignation.objects.filter(pool=pool, day=day).delete()
+    DailyDesignation.objects.bulk_create(
+        [DailyDesignation(pool=pool, user=u, day=day, status="cursed") for u in cursed]
+        + [DailyDesignation(pool=pool, user=u, day=day, status="blessed") for u in blessed]
+    )
+    return {"cursed": [u.login for u in cursed], "blessed": [u.login for u in blessed]}
+
+
 def assign_designations(pool, n_cursed=1, n_blessed=1, when=None, seed=None):
-    """Désigne aléatoirement des Maudits / Bénis pour la semaine."""
+    """[legacy] Désignait des Maudits / Bénis pour la SEMAINE (remplacé par le
+    tirage quotidien assign_daily_designations)."""
     ws = week_start(when)
     users = list(AppUser.objects.filter(pool=pool, is_active=True))
     random.Random(seed).shuffle(users)
