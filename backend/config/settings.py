@@ -11,6 +11,21 @@ SECRET_KEY = env("DJANGO_SECRET_KEY", default="dev-insecure-key")
 DEBUG = env("DJANGO_DEBUG")
 ALLOWED_HOSTS = env.list("DJANGO_ALLOWED_HOSTS", default=["*"])
 
+# Origines de confiance pour la protection CSRF (Django ≥ 4.0). En HTTPS, Django
+# compare l'en-tête Origin des POST à cette liste blanche. À renseigner avec le
+# ou les domaines publics, SCHÉMA INCLUS :
+#   DJANGO_CSRF_TRUSTED_ORIGINS=https://ldb.gitgud.fyi,https://www.ldb.gitgud.fyi
+CSRF_TRUSTED_ORIGINS = env.list("DJANGO_CSRF_TRUSTED_ORIGINS", default=[])
+
+# Déploiement derrière un reverse proxy TLS (nginx / Caddy / Traefik) : le proxy
+# termine le HTTPS et transmet en clair au conteneur. On dit à Django de se fier
+# à X-Forwarded-Proto pour savoir que la requête d'origine est sécurisée, et on
+# force les cookies en Secure. Opt-in (garde le dev local en HTTP fonctionnel).
+if env.bool("DJANGO_BEHIND_PROXY", default=False):
+    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+
 INSTALLED_APPS = [
     # Pas d'admin Django : tout se gère depuis /panel/ (auth Django conservée).
     "django.contrib.auth",
