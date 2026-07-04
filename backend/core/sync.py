@@ -205,12 +205,15 @@ def sync_evaluations(pool, evaluations, users=None):
         mark = ev.get("mark") if ev.get("mark") is not None else 0
 
         if "bsq" in proj:
+            # Une seule éval BSQ comptée par étudiant, même si le projet a été
+            # corrigé plusieurs fois (cohérent avec Shell/Rush/projets, dédupliqués
+            # par projet et non par correction).
             if record_event(user=u, pool=pool, rule_key="bsq_eval", occurred_at=occurred,
-                            context={}, source=API, dedup_key=f"eval:{ev.get('id')}"):
+                            context={}, source=API, dedup_key=f"bsq:{u.login}:{proj}"):
                 created += 1
             if record_event(user=u, pool=pool, rule_key="bsq_duration", occurred_at=occurred,
                             context={"duration_min": dur}, source=API,
-                            dedup_key=f"evaldur:{ev.get('id')}"):
+                            dedup_key=f"bsqdur:{u.login}:{proj}"):
                 created += 1
         elif "shell" in proj and ("00" in proj or "01" in proj):
             # Shell 00/01 : malus UNIQUEMENT si la note vaut exactement 100.
@@ -240,16 +243,30 @@ def sync_evaluations(pool, evaluations, users=None):
 
 
 def sync_flags(pool, flags, users=None):
-    """Flags de correction négatifs (Empty work, Crash, Norme, Can't explain…)."""
+    """
+    Flags de correction négatifs (Empty work, Crash, Norme, Can't explain…).
+
+    Deux corrections bêtes évitées ici :
+      - l'event est daté de la CORRECTION (begin_at), pas de l'heure de synchro
+        (sinon tous les flags s'empilent sur le jour du fetch, hors piscine) ;
+      - un même flag sur un même projet ne compte QU'UNE fois par étudiant, même
+        si le projet a été corrigé plusieurs fois (cohérent avec les évaluations,
+        dédupliquées par projet).
+    """
     users = users or _users(pool)
     created = 0
     for fl in flags:
         u = users.get(fl.get("login"))
         if not u:
             continue
-        ev = record_event(user=u, pool=pool, rule_key="correction_flag", occurred_at=timezone.now(),
-                          context={"flag": fl.get("flag")}, source=API,
-                          dedup_key=f"flag:{fl.get('id')}")
+        proj = (fl.get("project") or "").lower()
+        flag_name = fl.get("flag") or ""
+        dedup = (f"flag:{u.login}:{proj}:{flag_name.lower()}" if proj
+                 else f"flag:{fl.get('id')}")
+        ev = record_event(user=u, pool=pool, rule_key="correction_flag",
+                          occurred_at=_parse(fl.get("at")) or timezone.now(),
+                          context={"flag": flag_name, "project": proj}, source=API,
+                          dedup_key=dedup)
         if ev and ev.raw_points == 0:  # flag non pénalisant → on ne garde pas
             ev.is_voided = True
             ev.save(update_fields=["is_voided"])
@@ -389,7 +406,8 @@ def fetch_scale_teams_range(client, campus_id, start_iso, end_iso, cursus_id=Non
                 evaluations.append({"id": f"{sid}:{login}", "login": login, "project": project,
                                     "begin_at": begin, "end_at": filled, "mark": mark})
             if flag_neg:
-                flags.append({"id": f"{sid}:{login}", "login": login, "flag": flag_name})
+                flags.append({"id": f"{sid}:{login}", "login": login, "flag": flag_name,
+                              "project": project, "at": begin})
     return {"feedbacks": feedbacks, "evaluations": evaluations, "flags": flags, "pairs": pairs}
 
 
