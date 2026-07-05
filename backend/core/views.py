@@ -63,13 +63,17 @@ _MAX_COLS = 5
 def _hyperlink(url, text, enabled=True):
     """
     Hyperlien terminal (séquence OSC 8) : le TEXTE devient cliquable vers URL.
-    Format : ESC ]8;;URL BEL  texte  ESC ]8;; BEL.
-    enabled=False (mode --plain) → texte brut, aucune séquence.
+    Format : ESC ]8;;URL ST  texte  ESC ]8;; ST   (ST = ESC \\, terminateur
+    standard — le BEL faisait glitcher certains terminaux).
+
+    OPT-IN (?links) : Terminal.app (macOS) ne supporte pas OSC 8 et son parseur
+    avale même le texte du lien → pseudos invisibles. On n'émet donc AUCUNE
+    séquence par défaut ; ?links l'active pour iTerm2/Kitty/WezTerm/GNOME…
     """
     if not enabled:
         return text
-    esc, bel = "\033", "\007"
-    return f"{esc}]8;;{url}{bel}{text}{esc}]8;;{bel}"
+    esc, st = "\033", "\033\\"
+    return f"{esc}]8;;{url}{st}{text}{esc}]8;;{st}"
 
 
 def _ansi(colored):
@@ -85,13 +89,15 @@ def _ansi(colored):
     }
 
 
-def _render_board(pool, board, colored=True):
+def _render_board(pool, board, colored=True, links=False):
     """
     Classement curl-able, TOUS les participants en grille multi-colonnes (jusqu'à
     5 colonnes côte à côte, ~20 lignes chacune) pour rester compact en largeur
     (~80–100 colonnes). Le Top 100 tient sur un écran ; au-delà, la grille
     s'allonge verticalement (5 colonnes plus longues) mais tout le monde apparaît.
 
+    links=True (?links) : pseudos cliquables via OSC 8 — opt-in car Terminal.app
+    ne supporte pas la séquence et rend les pseudos invisibles (cf. _hyperlink).
     Les largeurs sont calculées sur le texte VISIBLE : les hyperliens OSC 8 et les
     codes couleur SGR (caractères « invisibles ») ne faussent pas l'alignement.
     """
@@ -126,7 +132,7 @@ def _render_board(pool, board, colored=True):
         # login cliquable → profil intra ; padding calculé sur le texte VISIBLE
         # (les séquences OSC 8 / couleurs ne comptent pas dans la largeur).
         name = login_of(r)[:lw]
-        linked = _hyperlink(_PROFILE_URL.format(login=login_of(r)), name, enabled=colored)
+        linked = _hyperlink(_PROFILE_URL.format(login=login_of(r)), name, enabled=links)
         pad = " " * (lw - len(name))
         return (f"{rc}{rank:>{rw}}{p['reset']} {p['cream']}{linked}{p['reset']}{pad} "
                 f"{pcol}{pts:>{pw}}{p['reset']}")
@@ -153,9 +159,10 @@ def _render_board(pool, board, colored=True):
             lines.append(indent + sep.join(parts).rstrip())
 
     lines.append(divider())
+    hint = "" if links else f"   {p['dim']}(?links : pseudos cliquables — iTerm2/Kitty/WezTerm){p['reset']}"
     lines += [
         f"{indent}{p['muted']}crafted by {p['lav']}{p['bold']}Dedavid{p['reset']}"
-        f"{p['muted']} & {p['lav']}{p['bold']}Rydelepi{p['reset']}",
+        f"{p['muted']} & {p['lav']}{p['bold']}Rydelepi{p['reset']}{hint}",
         "",
     ]
     return "\n".join(lines) + "\n"
@@ -176,5 +183,6 @@ def leaderboard_preview(request):
     # Score réel = cumul figé (snapshots) + jour courant en live — TOUS les participants
     board = standings(pool, include_today=True)
     colored = "plain" not in request.GET  # curl ...?plain pour couper les couleurs
-    body = _render_board(pool, board, colored=colored)
+    links = colored and "links" in request.GET  # ?links : pseudos cliquables (OSC 8)
+    body = _render_board(pool, board, colored=colored, links=links)
     return HttpResponse(body, content_type="text/plain; charset=utf-8")
