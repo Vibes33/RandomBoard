@@ -35,6 +35,12 @@ _PROFILE_URL = "https://profile.intra.42.fr/users/{login}"
 _SECRET_LOGIN = "dedavid"
 _SECRET_CHANCE = 0.01
 
+# Mise en page compacte « un seul écran » : jusqu'à 5 colonnes de 20 lignes
+# (= Top 100 visible d'un coup dans un terminal ~80–100 × 24–30). curl …?full
+# déroule l'intégralité du classement (plus haut, peut scroller).
+_PER_COL = 20
+_MAX_COLS = 5
+
 
 def _hyperlink(url, text, enabled=True):
     """
@@ -61,10 +67,15 @@ def _ansi(colored):
     }
 
 
-def _render_board(pool, board, colored=True):
+def _render_board(pool, board, colored=True, full=False):
     """
-    Classement complet (Witch Hat Atelier), TOUS les participants en colonnes de 50
-    (donc jusqu'à 3 colonnes), avec les points à côté du pseudo.
+    Classement curl-able mis en page pour tenir sur UN écran de terminal standard
+    (~80–100 colonnes × 24–30 lignes) : plusieurs colonnes côte à côte, ~20 lignes
+    chacune. Par défaut → Top 100 (jusqu'à 5 colonnes). curl …?full déroule tout
+    le monde (plus haut, peut scroller).
+
+    Les largeurs sont calculées sur le texte VISIBLE : les hyperliens OSC 8 et les
+    codes couleur SGR (caractères « invisibles ») ne faussent pas l'alignement.
     """
     p = _ansi(colored)
     # 1 chance sur 100 : « Leaderboard Secret » — tous les pseudos → dedavid.
@@ -73,14 +84,20 @@ def _render_board(pool, board, colored=True):
     def login_of(r):
         return _SECRET_LOGIN if secret else r["login"]
 
-    COL = 50
-    lw = min(max((len(login_of(r)) for r in board), default=6), 11)
-    pw = max((len(str(round(r["total"]))) for r in board), default=5)
-    pw = max(pw, 5)
-    n = len(board)
-    ncols = max(1, (n + COL - 1) // COL)
-    cellw = 4 + 1 + lw + 1 + pw  # rang(4) + login + points
-    total_w = ncols * cellw + (ncols - 1) * 3
+    total = len(board)
+    shown = board if full else board[:_PER_COL * _MAX_COLS]  # Top 100 par défaut
+    n = len(shown)
+
+    # On met le PLUS de colonnes possible (≤ _MAX_COLS) pour minimiser la hauteur.
+    ncols = max(1, min(_MAX_COLS, (n + _PER_COL - 1) // _PER_COL))
+    rows = max(1, (n + ncols - 1) // ncols)
+
+    rw = max(2, len(str(total)))                                    # largeur du rang
+    lw = min(max((len(login_of(r)) for r in shown), default=6), 8)  # largeur login
+    pw = max(4, max((len(str(round(r["total"]))) for r in shown), default=4))
+    cellw = rw + 1 + lw + 1 + pw
+    sep = indent = "  "
+    total_w = ncols * cellw + (ncols - 1) * len(sep)
 
     def cell(r):
         if r is None:
@@ -90,39 +107,41 @@ def _render_board(pool, board, colored=True):
         pts = round(r["total"])
         pcol = p["green"] if pts >= 0 else p["red"]
         # login cliquable → profil intra ; padding calculé sur le texte VISIBLE
-        # (les séquences OSC 8 ne comptent pas dans la largeur de colonne).
+        # (les séquences OSC 8 / couleurs ne comptent pas dans la largeur).
         name = login_of(r)[:lw]
         linked = _hyperlink(_PROFILE_URL.format(login=login_of(r)), name, enabled=colored)
         pad = " " * (lw - len(name))
-        return (f"{rc}{rank:>4}{p['reset']} {p['cream']}{linked}{p['reset']}{pad} "
+        return (f"{rc}{rank:>{rw}}{p['reset']} {p['cream']}{linked}{p['reset']}{pad} "
                 f"{pcol}{pts:>{pw}}{p['reset']}")
 
     def divider():
-        return f"   {p['lav']}☽ {'─' * (total_w - 4)} ☾{p['reset']}"
+        return f"{indent}{p['lav']}☽ {'─' * max(0, total_w - 4)} ☾{p['reset']}"
 
+    scope = f"top {n} / {total}" if (not full and total > n) else f"{total} participants"
     lines = [
         "",
-        f"   {p['title']}{p['bold']}✦ 42 - Leaderboard ✦{p['reset']}"
-        f"   {p['muted']}{n} participants{p['reset']}",
-        f"   {p['muted']}{pool.name} · {pool.starts_on:%d/%m} → {pool.ends_on:%d/%m/%Y}{p['reset']}",
+        f"{indent}{p['title']}{p['bold']}✦ 42 - Leaderboard ✦{p['reset']}"
+        f"   {p['muted']}{scope}{p['reset']}",
+        f"{indent}{p['muted']}{pool.name} · {pool.starts_on:%d/%m} → {pool.ends_on:%d/%m/%Y}{p['reset']}",
         divider(),
-        "",
     ]
 
-    if not board:
-        lines.append(f"     {p['dim']}(le grimoire est encore vierge…){p['reset']}")
+    if not shown:
+        lines.append(f"{indent}{p['dim']}(le grimoire est encore vierge…){p['reset']}")
     else:
-        rows = COL if ncols > 1 else n
+        # Remplissage colonne par colonne : rangs 1..rows en col 1, etc.
         for i in range(rows):
-            parts = [cell(board[c * COL + i] if c * COL + i < n else None) for c in range(ncols)]
-            lines.append("   " + "   ".join(parts).rstrip())
+            parts = [cell(shown[c * rows + i] if c * rows + i < n else None)
+                     for c in range(ncols)]
+            lines.append(indent + sep.join(parts).rstrip())
 
+    lines.append(divider())
+    if not full and total > n:
+        lines.append(f"{indent}{p['muted']}… + {total - n} autres · "
+                     f"curl …?full pour la liste complète{p['reset']}")
     lines += [
-        "",
-        divider(),
-        f"   {p['muted']}crafted by {p['lav']}{p['bold']}Dedavid{p['reset']}"
+        f"{indent}{p['muted']}crafted by {p['lav']}{p['bold']}Dedavid{p['reset']}"
         f"{p['muted']} & {p['lav']}{p['bold']}Rydelepi{p['reset']}",
-        f"   {p['indigo']}⋆ ˚ ｡ ✦ ⋆ ˚ ｡ ✦ ⋆ ˚ ｡ ✦{p['reset']}",
         "",
     ]
     return "\n".join(lines) + "\n"
@@ -143,5 +162,6 @@ def leaderboard_preview(request):
     # Score réel = cumul figé (snapshots) + jour courant en live — TOUS les participants
     board = standings(pool, include_today=True)
     colored = "plain" not in request.GET  # curl ...?plain pour couper les couleurs
-    body = _render_board(pool, board, colored=colored)
+    full = "full" in request.GET          # curl ...?full pour dérouler tout le monde
+    body = _render_board(pool, board, colored=colored, full=full)
     return HttpResponse(body, content_type="text/plain; charset=utf-8")
