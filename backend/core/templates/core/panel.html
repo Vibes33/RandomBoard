@@ -209,7 +209,7 @@
   <section class="pane" id="p-users">
     <div class="sec">Classement &amp; ajustement manuel des scores</div>
     <div class="card"><table><thead><tr>
-      <th class="rk">#</th><th>Login</th><th>Nom</th><th class="num">Score</th><th style="width:210px">Ajuster</th>
+      <th class="rk">#</th><th>Login</th><th>Nom</th><th class="num">Score</th><th style="width:340px">Ajuster (raison obligatoire)</th>
     </tr></thead><tbody id="users-tb"><tr><td colspan="5" class="spin">Chargement…</td></tr></tbody></table></div>
   </section>
 
@@ -456,11 +456,12 @@ async function loadUsers(){
   tb.innerHTML=users.length?users.map(u=>`<tr class="urow" data-user="${u.id}">
     <td class="rk">${u.rank}</td><td><b>${esc(u.login)}</b></td><td class="meta">${esc(u.name||'')}</td>
     <td class="num">${money(u.total)}</td>
-    <td><input type="number" placeholder="± pts" style="width:88px" id="adj-${u.id}">
+    <td><input type="number" placeholder="± pts" style="width:74px" id="adj-${u.id}">
+        <input placeholder="raison…" style="width:170px" id="rsn-${u.id}" maxlength="120">
         <button class="mini" data-adj="${u.id}">OK</button></td></tr>`).join('')
     :'<tr><td colspan="5" class="empty">Aucun étudiant.</td></tr>';
   tb.querySelectorAll('[data-adj]').forEach(b=>b.onclick=e=>{e.stopPropagation();adjust(b.dataset.adj);});
-  tb.querySelectorAll('input[id^=adj-]').forEach(i=>i.onclick=e=>e.stopPropagation());
+  tb.querySelectorAll('input[id^=adj-],input[id^=rsn-]').forEach(i=>i.onclick=e=>e.stopPropagation());
   tb.querySelectorAll('.urow').forEach(r=>r.onclick=()=>openProfile(r.dataset.user));
 }
 
@@ -504,7 +505,8 @@ async function openProfile(id){
 }
 async function adjust(id){
   const v=parseFloat($('#adj-'+id).value); if(isNaN(v)){toast('Entre un nombre',true);return;}
-  const reason=prompt('Raison de l\'ajustement ?','ajustement manuel'); if(reason===null)return;
+  const rsn=$('#rsn-'+id), reason=rsn.value.trim();
+  if(!reason){toast('La raison est obligatoire',true);rsn.focus();return;}
   const r=await api('/panel/api/users/'+id+'/adjust','POST',{points:v,reason});
   toast('Score ajusté → '+r.total); loadUsers();
 }
@@ -523,7 +525,8 @@ async function loadLogs(){
 }
 function renderLogs(logs){
   $('#logs-tb').innerHTML=logs.length?logs.map(l=>`<tr><td class="meta">${l.at}</td><td><b>${esc(l.login)}</b></td>
-    <td>${esc(l.event)}</td><td class="meta">${esc(l.source)}</td><td class="meta">${l.day}</td>
+    <td>${esc(l.event)}${l.reason?`<div style="font-size:11px;color:var(--gold)">« ${esc(l.reason)} »${l.by?` — ${esc(l.by)}`:''}</div>`:''}</td>
+    <td class="meta">${esc(l.source)}</td><td class="meta">${l.day}</td>
     <td class="num">${money(l.points)}</td></tr>`).join('')
     :'<tr><td colspan="6" class="empty">Aucun log.</td></tr>';
 }

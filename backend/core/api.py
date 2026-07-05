@@ -262,10 +262,15 @@ def api_user_adjust(request, user_id):
         points = _dec(data.get("points"))
     except (InvalidOperation, TypeError):
         return HttpResponseBadRequest("Nombre de points invalide.")
+    # Raison OBLIGATOIRE : chaque ajustement manuel doit être justifié — elle est
+    # stockée avec l'event et visible dans les logs globaux + le profil étudiant.
+    reason = (data.get("reason") or "").strip()
+    if not reason:
+        return HttpResponseBadRequest("La raison de l'ajustement est obligatoire.")
     user = AppUser.objects.filter(id=user_id, pool=pool).first()
     if not user:
         return HttpResponseBadRequest("Étudiant introuvable.")
-    adjust_user_score(user, pool, points, reason=data.get("reason", ""), staff=request.user)
+    adjust_user_score(user, pool, points, reason=reason, staff=request.user)
     board = {r["login"]: r for r in standings(pool, include_today=True)}
     b = board.get(user.login)
     return JsonResponse({"ok": True, "total": round(b["total"]) if b else 0})
@@ -394,6 +399,9 @@ def api_logs(request):
         "at": e.occurred_at.strftime("%d/%m %H:%M"), "login": e.user.login,
         "event": e.event_type, "source": e.source,
         "points": float(e.raw_points), "day": e.event_date.strftime("%d/%m"),
+        # raison d'un ajustement manuel (+ auteur) → visible dans l'onglet Logs
+        "reason": (e.raw_payload or {}).get("reason", ""),
+        "by": (e.raw_payload or {}).get("by", ""),
     } for e in qs.order_by("-occurred_at")[:400]]
     return JsonResponse({
         "logs": logs,

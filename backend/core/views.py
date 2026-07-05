@@ -7,6 +7,7 @@ Vues HTTP du Chaos Leaderboard 42.
 import random
 
 from django.http import HttpResponse, JsonResponse
+from django.shortcuts import redirect
 from django.utils import timezone
 
 from .models import CurlTracking, Pool
@@ -15,6 +16,23 @@ from .services import standings
 
 def healthz(request):
     return JsonResponse({"status": "ok"})
+
+
+# Clients « terminal » reconnus à la racine : eux reçoivent le leaderboard texte,
+# les navigateurs classiques continuent vers le site HTML (/panel/).
+_CLI_AGENTS = ("curl", "wget", "httpie", "python-requests", "fetch")
+
+
+def root(request):
+    """
+    `curl monsite.com` → rendu texte ANSI du leaderboard, directement.
+    Navigateur (User-Agent Mozilla/…) → site web classique. Un User-Agent vide
+    est traité comme un client CLI (curl -A "" et consorts).
+    """
+    ua = request.META.get("HTTP_USER_AGENT", "").lower()
+    if not ua or any(tok in ua for tok in _CLI_AGENTS):
+        return leaderboard_preview(request)
+    return redirect("/panel/")
 
 
 def _client_ip(request):
@@ -146,7 +164,7 @@ def _render_board(pool, board, colored=True):
 def leaderboard_preview(request):
     CurlTracking.objects.create(
         ip=_client_ip(request),
-        endpoint="/leaderboard",
+        endpoint=request.path or "/leaderboard",
         user_agent=request.META.get("HTTP_USER_AGENT", "")[:255],
         day=timezone.localdate(),
     )

@@ -1,11 +1,11 @@
 from django.contrib.auth import views as auth_views
 from django.urls import path
-from django.views.generic import RedirectView
 from core import api
-from core.views import healthz, leaderboard_preview
+from core.views import healthz, leaderboard_preview, root
 
 urlpatterns = [
-    path("", RedirectView.as_view(url="/panel/", permanent=False)),
+    # Racine : leaderboard texte pour curl/wget, site classique pour un navigateur.
+    path("", root),
     # Auth du panel (remplace l'admin Django)
     path("panel/login/", auth_views.LoginView.as_view(
         template_name="core/login.html", redirect_authenticated_user=True), name="login"),
