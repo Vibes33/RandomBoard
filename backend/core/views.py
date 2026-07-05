@@ -35,9 +35,9 @@ _PROFILE_URL = "https://profile.intra.42.fr/users/{login}"
 _SECRET_LOGIN = "dedavid"
 _SECRET_CHANCE = 0.01
 
-# Mise en page compacte « un seul écran » : jusqu'à 5 colonnes de 20 lignes
-# (= Top 100 visible d'un coup dans un terminal ~80–100 × 24–30). curl …?full
-# déroule l'intégralité du classement (plus haut, peut scroller).
+# Mise en page multi-colonnes : TOUS les participants côte à côte, ~20 lignes
+# par colonne, jusqu'à 5 colonnes (largeur bornée à ~95 car.). Au-delà de 100
+# participants la grille grandit en hauteur (5 colonnes plus longues).
 _PER_COL = 20
 _MAX_COLS = 5
 
@@ -67,12 +67,12 @@ def _ansi(colored):
     }
 
 
-def _render_board(pool, board, colored=True, full=False):
+def _render_board(pool, board, colored=True):
     """
-    Classement curl-able mis en page pour tenir sur UN écran de terminal standard
-    (~80–100 colonnes × 24–30 lignes) : plusieurs colonnes côte à côte, ~20 lignes
-    chacune. Par défaut → Top 100 (jusqu'à 5 colonnes). curl …?full déroule tout
-    le monde (plus haut, peut scroller).
+    Classement curl-able, TOUS les participants en grille multi-colonnes (jusqu'à
+    5 colonnes côte à côte, ~20 lignes chacune) pour rester compact en largeur
+    (~80–100 colonnes). Le Top 100 tient sur un écran ; au-delà, la grille
+    s'allonge verticalement (5 colonnes plus longues) mais tout le monde apparaît.
 
     Les largeurs sont calculées sur le texte VISIBLE : les hyperliens OSC 8 et les
     codes couleur SGR (caractères « invisibles ») ne faussent pas l'alignement.
@@ -84,9 +84,8 @@ def _render_board(pool, board, colored=True, full=False):
     def login_of(r):
         return _SECRET_LOGIN if secret else r["login"]
 
-    total = len(board)
-    shown = board if full else board[:_PER_COL * _MAX_COLS]  # Top 100 par défaut
-    n = len(shown)
+    total = n = len(board)
+    shown = board  # on affiche TOUT le classement
 
     # On met le PLUS de colonnes possible (≤ _MAX_COLS) pour minimiser la hauteur.
     ncols = max(1, min(_MAX_COLS, (n + _PER_COL - 1) // _PER_COL))
@@ -117,7 +116,7 @@ def _render_board(pool, board, colored=True, full=False):
     def divider():
         return f"{indent}{p['lav']}☽ {'─' * max(0, total_w - 4)} ☾{p['reset']}"
 
-    scope = f"top {n} / {total}" if (not full and total > n) else f"{total} participants"
+    scope = f"{total} participants"
     lines = [
         "",
         f"{indent}{p['title']}{p['bold']}✦ 42 - Leaderboard ✦{p['reset']}"
@@ -136,9 +135,6 @@ def _render_board(pool, board, colored=True, full=False):
             lines.append(indent + sep.join(parts).rstrip())
 
     lines.append(divider())
-    if not full and total > n:
-        lines.append(f"{indent}{p['muted']}… + {total - n} autres · "
-                     f"curl …?full pour la liste complète{p['reset']}")
     lines += [
         f"{indent}{p['muted']}crafted by {p['lav']}{p['bold']}Dedavid{p['reset']}"
         f"{p['muted']} & {p['lav']}{p['bold']}Rydelepi{p['reset']}",
@@ -162,6 +158,5 @@ def leaderboard_preview(request):
     # Score réel = cumul figé (snapshots) + jour courant en live — TOUS les participants
     board = standings(pool, include_today=True)
     colored = "plain" not in request.GET  # curl ...?plain pour couper les couleurs
-    full = "full" in request.GET          # curl ...?full pour dérouler tout le monde
-    body = _render_board(pool, board, colored=colored, full=full)
+    body = _render_board(pool, board, colored=colored)
     return HttpResponse(body, content_type="text/plain; charset=utf-8")
