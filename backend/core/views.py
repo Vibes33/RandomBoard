@@ -23,15 +23,16 @@ def healthz(request):
 _CLI_AGENTS = ("curl", "wget", "httpie", "python-requests", "fetch")
 
 
-def root(request):
+def root(request, login=None):
     """
     `curl monsite.com` → rendu texte ANSI du leaderboard, directement.
+    `curl monsite.com/aandreo` → même leaderboard, pseudo `aandreo` en surbrillance.
     Navigateur (User-Agent Mozilla/…) → site web classique. Un User-Agent vide
     est traité comme un client CLI (curl -A "" et consorts).
     """
     ua = request.META.get("HTTP_USER_AGENT", "").lower()
     if not ua or any(tok in ua for tok in _CLI_AGENTS):
-        return leaderboard_preview(request)
+        return leaderboard_preview(request, me=login)
     return redirect("/panel/")
 
 
@@ -48,8 +49,10 @@ _ESC = "\033["
 # Profil intra 42 de chaque étudiant (login cliquable dans le terminal).
 _PROFILE_URL = "https://profile.intra.42.fr/users/{login}"
 
-# Easter egg ultra-rare : 1 appel curl sur 100, tous les pseudos deviennent
-# « dedavid » (points/rangs inchangés) et pointent vers son profil.
+# Easter egg : à chaque appel curl, une (petite) chance que tous les pseudos
+# deviennent « dedavid » (points/rangs inchangés) et pointent vers son profil.
+# La probabilité est réglable au panel (PoolConfig.secret_board_chance) ; cette
+# constante n'est plus qu'un fallback si aucune config n'existe.
 _SECRET_LOGIN = "dedavid"
 _SECRET_CHANCE = 0.01
 
@@ -89,27 +92,42 @@ def _ansi(colored):
     }
 
 
-def _render_board(pool, board, colored=True, links=False):
+def _render_board(pool, board, colored=True, links=True, me=None, secret_chance=None):
     """
     Classement curl-able, TOUS les participants en grille multi-colonnes (jusqu'à
     5 colonnes côte à côte, ~20 lignes chacune) pour rester compact en largeur
     (~80–100 colonnes). Le Top 100 tient sur un écran ; au-delà, la grille
     s'allonge verticalement (5 colonnes plus longues) mais tout le monde apparaît.
 
-    links=True (?links) : pseudos cliquables via OSC 8 — opt-in car Terminal.app
-    ne supporte pas la séquence et rend les pseudos invisibles (cf. _hyperlink).
+    links=True (défaut) : pseudos cliquables via OSC 8 → profil intra. Fonctionne
+    nativement en SSH (c'est le terminal LOCAL qui rend le lien). Coupable via
+    ?nolinks pour les rares terminaux qui ne gèrent pas la séquence.
+    me : login à mettre en SURBRILLANCE (curl ?me=login) — gras + vidéo inversée.
+    secret_chance : proba du dedavid board (défaut = _SECRET_CHANCE).
     Les largeurs sont calculées sur le texte VISIBLE : les hyperliens OSC 8 et les
     codes couleur SGR (caractères « invisibles ») ne faussent pas l'alignement.
     """
     p = _ansi(colored)
-    # 1 chance sur 100 : « Leaderboard Secret » — tous les pseudos → dedavid.
-    secret = random.random() < _SECRET_CHANCE
+    me = (me or "").lower() or None
+    chance = _SECRET_CHANCE if secret_chance is None else float(secret_chance)
+    # « dedavid board » (proba réglable) — tous les pseudos → dedavid.
+    secret = random.random() < chance
+    # DA du dedavid board : palette dédiée émeraude + bleu océan (256 couleurs)
+    # pour qu'il se distingue au premier coup d'œil du leaderboard normal.
+    if secret and colored:
+        emerald, ocean = f"{_ESC}38;5;78m", f"{_ESC}38;5;38m"
+        p = {**p, "title": emerald, "cream": emerald, "gold": emerald,
+             "silver": emerald, "bronze": emerald, "indigo": emerald,
+             "lav": ocean, "muted": ocean, "green": ocean, "red": ocean}
 
     def login_of(r):
         return _SECRET_LOGIN if secret else r["login"]
 
     total = n = len(board)
     shown = board  # on affiche TOUT le classement
+    # Rang du login mis en surbrillance (hors mode secret où tout est « dedavid »).
+    my_row = None if secret else next(
+        (r for r in shown if r["login"].lower() == me), None) if me else None
 
     # On met le PLUS de colonnes possible (≤ _MAX_COLS) pour minimiser la hauteur.
     ncols = max(1, min(_MAX_COLS, (n + _PER_COL - 1) // _PER_COL))
@@ -126,14 +144,20 @@ def _render_board(pool, board, colored=True, links=False):
         if r is None:
             return " " * cellw
         rank = r["rank"]
-        rc = {1: p["gold"], 2: p["silver"], 3: p["bronze"]}.get(rank, p["muted"])
         pts = round(r["total"])
-        pcol = p["green"] if pts >= 0 else p["red"]
         # login cliquable → profil intra ; padding calculé sur le texte VISIBLE
         # (les séquences OSC 8 / couleurs ne comptent pas dans la largeur).
         name = login_of(r)[:lw]
         linked = _hyperlink(_PROFILE_URL.format(login=login_of(r)), name, enabled=links)
         pad = " " * (lw - len(name))
+        # Surbrillance du login demandé (?me=) : gras + vidéo inversée sur toute la
+        # cellule, SANS reset intermédiaire (sinon l'inversion « saute »). Le lien
+        # OSC 8 ne contient pas de SGR, donc l'inversion tient dessous.
+        if colored and me and login_of(r).lower() == me:
+            hl = f"{_ESC}1m{_ESC}7m"
+            return f"{hl}{rank:>{rw}} {linked}{pad} {pts:>{pw}}{p['reset']}"
+        rc = {1: p["gold"], 2: p["silver"], 3: p["bronze"]}.get(rank, p["muted"])
+        pcol = p["green"] if pts >= 0 else p["red"]
         return (f"{rc}{rank:>{rw}}{p['reset']} {p['cream']}{linked}{p['reset']}{pad} "
                 f"{pcol}{pts:>{pw}}{p['reset']}")
 
@@ -141,13 +165,21 @@ def _render_board(pool, board, colored=True, links=False):
         return f"{indent}{p['lav']}☽ {'─' * max(0, total_w - 4)} ☾{p['reset']}"
 
     scope = f"{total} participants"
+    title_txt = "✦ dedavid board ✦" if secret else "✦ 42 - Leaderboard ✦"
     lines = [
         "",
-        f"{indent}{p['title']}{p['bold']}✦ 42 - Leaderboard ✦{p['reset']}"
+        f"{indent}{p['title']}{p['bold']}{title_txt}{p['reset']}"
         f"   {p['muted']}{scope}{p['reset']}",
         f"{indent}{p['muted']}{pool.name} · {pool.starts_on:%d/%m} → {pool.ends_on:%d/%m/%Y}{p['reset']}",
-        divider(),
     ]
+    # Note « c'est toi » quand ?me= est fourni (rang + points, ou introuvable).
+    if me and not secret:
+        if my_row:
+            lines.append(f"{indent}{p['gold']}{p['bold']}➤ toi : #{my_row['rank']} "
+                         f"· {round(my_row['total'])} pts{p['reset']}")
+        else:
+            lines.append(f"{indent}{p['dim']}(« {me} » introuvable au classement){p['reset']}")
+    lines.append(divider())
 
     if not shown:
         lines.append(f"{indent}{p['dim']}(le grimoire est encore vierge…){p['reset']}")
@@ -159,7 +191,8 @@ def _render_board(pool, board, colored=True, links=False):
             lines.append(indent + sep.join(parts).rstrip())
 
     lines.append(divider())
-    hint = "" if links else f"   {p['dim']}(?links : pseudos cliquables — iTerm2/Kitty/WezTerm){p['reset']}"
+    # Astuce discrète : surligner son propre login (masquée si déjà utilisé).
+    hint = "" if me else f"   {p['dim']}(?me=login : surligne ton pseudo){p['reset']}"
     lines += [
         f"{indent}{p['muted']}crafted by {p['lav']}{p['bold']}Dedavid{p['reset']}"
         f"{p['muted']} & {p['lav']}{p['bold']}Rydelepi{p['reset']}{hint}",
@@ -168,7 +201,7 @@ def _render_board(pool, board, colored=True, links=False):
     return "\n".join(lines) + "\n"
 
 
-def leaderboard_preview(request):
+def leaderboard_preview(request, me=None):
     CurlTracking.objects.create(
         ip=_client_ip(request),
         endpoint=request.path or "/leaderboard",
@@ -183,6 +216,11 @@ def leaderboard_preview(request):
     # Score réel = cumul figé (snapshots) + jour courant en live — TOUS les participants
     board = standings(pool, include_today=True)
     colored = "plain" not in request.GET  # curl ...?plain pour couper les couleurs
-    links = colored and "links" in request.GET  # ?links : pseudos cliquables (OSC 8)
-    body = _render_board(pool, board, colored=colored, links=links)
+    links = "nolinks" not in request.GET  # pseudos cliquables (OSC 8) par défaut
+    # login en surbrillance : /aandreo (path) prioritaire, sinon ?me=aandreo
+    me = me or request.GET.get("me")
+    from .chaos import get_config
+    chance = float(get_config(pool).secret_board_chance)
+    body = _render_board(pool, board, colored=colored, links=links, me=me,
+                         secret_chance=chance)
     return HttpResponse(body, content_type="text/plain; charset=utf-8")

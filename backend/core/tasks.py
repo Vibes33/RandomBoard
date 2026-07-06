@@ -100,17 +100,56 @@ def run_sync(sync_run_id):
 @shared_task
 def nightly_snapshot():
     """
-    Job de minuit : fige la veille (jour qui vient de se clôturer) pour chaque
-    Piscine active, puis verrouille son coefficient. Idempotent & rejouable.
+    Job de minuit (00:05) : FINALISE la veille (jour désormais terminé) pour
+    chaque piscine active, puis la fige.
+      1. re-fetch de la veille + scoring de la famille LOGTIME (score_cumulative) :
+         c'est ICI que les points logtime tombent — jamais en cours de journée.
+         Les autres syncs (feedbacks/évals/flags/places/exam) sont rejoués par
+         sécurité (idempotents). `spread_plague` N'EST PAS rejoué (non idempotent,
+         cf. mémoire projet — la propagation a déjà eu lieu en direct via poll_42) ;
+      2. clôture (stacking, effets des élus, taxe du podium) sur les gains complets ;
+      3. snapshot + verrouillage du coefficient.
+    Idempotent & rejouable. Sans clés API : on fige simplement l'existant.
     """
+    import logging
+
     from .chaos import apply_stacking
     from .derived import apply_designation_effects, apply_podium_tax
+    from .sync import (_users, fetch_exam_windows, sync_evaluations, sync_exam_time,
+                       sync_feedbacks, sync_flags, sync_host_effects, sync_last_day,
+                       sync_locations)
+    from .sync import fetch_day
+    logger = logging.getLogger(__name__)
     yesterday = timezone.localdate() - timedelta(days=1)
+    client = FtClient()
     summary = {}
     for pool in Pool.objects.filter(is_active=True):
+        # 1) finalisation de la veille sur données complètes (logtime + discrets)
+        if client.configured and pool.starts_on <= yesterday <= pool.ends_on:
+            campus = pool.campus_id or settings.FT_CAMPUS_ID
+            cursus = pool.cursus_id or settings.FT_CURSUS_ID
+            try:
+                p = fetch_day(client, campus, yesterday, cursus_id=cursus, parallel=True)
+                users = _users(pool)
+                sync_locations(pool, p["locations"], users, score_cumulative=True)
+                sync_feedbacks(pool, p["feedbacks"], users)
+                sync_evaluations(pool, p["evaluations"], users)
+                sync_flags(pool, p["flags"], users)
+                sync_host_effects(pool, yesterday, p["locations"], p.get("pairs", []), users)
+                try:
+                    windows = fetch_exam_windows(client, campus, cursus)
+                except Exception:  # noqa: BLE001 — exam_time ignoré si l'endpoint échoue
+                    windows = []
+                sync_exam_time(pool, yesterday, p["locations"], windows, users)
+                sync_last_day(pool, yesterday, p.get("pairs", []), users)
+            except Exception as ex:  # noqa: BLE001 — fetch KO : on fige l'existant
+                logger.warning("nightly finalize %s %s: %s", pool.slug, yesterday, ex)
+
+        # 2) clôture (idempotente) sur les gains désormais complets
         apply_stacking(pool, yesterday)  # malus stacking sur le jour clôturé (opt-in)
         apply_designation_effects(pool, yesterday)  # ± % des gains des élus du jour
         apply_podium_tax(pool, yesterday)  # rubber-banding top 3 → bottom 10
+        # 3) fige + verrouille
         count = snapshot_day(pool, yesterday)
         DailyCoefficient.objects.filter(pool=pool, day=yesterday).update(locked=True)
         summary[pool.slug] = count

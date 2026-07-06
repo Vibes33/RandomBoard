@@ -53,7 +53,9 @@ class Command(BaseCommand):
                 return
             self.stdout.write(f"Reçu : {len(data['locations'])} location(s).")
 
-        counts = sync_all(pool, data)
+        # --demo : on force le scoring logtime pour montrer tout le pipeline
+        # (en live, le logtime du jour courant n'est scoré qu'à minuit).
+        counts = sync_all(pool, data, score_cumulative=bool(o["demo"]))
         self.stdout.write(self.style.SUCCESS(
             f"Ingestion : {counts['locations']} (locations) · "
             f"{counts['feedbacks']} (feedbacks) · {counts['evaluations']} (évals)."

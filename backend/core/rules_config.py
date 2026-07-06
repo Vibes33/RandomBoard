@@ -42,15 +42,14 @@ RULES = [
      {"type": "from_context", "value_key": "points", "pct": 30}),
     ("daily_cursed", "loss", "Maudit du jour : malus % des gains du jour",
      {"type": "from_context", "value_key": "points", "pct": 30}),
-    ("midnight_bonus", "gain", "Logtime quasi-plein (paliers : 20h / 23h50)",
-     {"type": "tiers", "value_key": "minutes", "default": 0,
-      "tiers": {"1200": 100, "1430": 300}}),
+    ("midnight_bonus", "gain", "Logtime total du jour 23h50–23h59 (bonus fixe)",
+     {"type": "fixed", "points": 300}),
     ("kw_quoi_sans_feur", "loss", 'Feedback "quoi" sans "feur" / "coubeh"',
      {"type": "fixed", "min": -50, "max": -30, "rank_penalty": 1}),
     ("reconnect_same_pc", "loss", "Reco sur le MÊME pc dans la journée",
      {"type": "fixed", "min": -20, "max": -10}),
     ("logtime_high", "loss", "Logtime > 14h (malus fixe du jour)",
-     {"type": "fixed", "points": -200}),
+     {"type": "fixed", "points": -100}),
     ("aura_first_coalition", "loss", "1er de sa coalition (perte d'aura)",
      {"type": "fixed", "min": -1200, "max": -800}),
     ("last_day_corrections", "event", "Dernier jour : points par correction donnée",
@@ -92,12 +91,12 @@ RULES = [
       "map": {"Empty work": -100, "Crash": -80, "Norme": -60,
               "Can't explain": -80, "Cheat": -200}}),
     ("project_random", "event", "Projet évalué (points random ±, au pif)",
-     {"type": "random_modifier", "base": 0, "rand_min": -50, "rand_max": 80}),
+     {"type": "random_modifier", "base": 0, "rand_min": -100, "rand_max": 120}),
     # ─── nouvelles règles (étape 4.1) ───
     ("assiduity_streak", "gain", "Assiduité : jours consécutifs (week-ends neutres, capé à 7 j)",
-     {"type": "multiplier", "value_key": "streak", "factor": 10, "cap": 7}),
-    ("project_perfect", "gain", "Projet validé pile à 100 (bonus nerfé)",
-     {"type": "fixed", "points": 30}),
+     {"type": "multiplier", "value_key": "streak", "factor": 5, "cap": 7}),
+    ("project_perfect", "loss", "Rendre un projet pile à 100 (malus)",
+     {"type": "fixed", "points": -30}),
     ("cluster_bonus", "event", "Bonus/malus selon le cluster où l'élève est assis",
      {"type": "map_lookup", "key_field": "cluster", "default": 0,
       "map": {"c1": 15, "c2": 0, "c3": -10}}),
@@ -124,6 +123,9 @@ INACTIVE_RULES = {
     "kw_quoi_feur", "kw_quoi_sans_feur",   # doublons de feedback_keywords
     "curl_leaderboard",                    # inattribuable (pas d'auth sur le curl)
     "config_weekend", "config_daily",      # porte-config de l'ancien modèle
+    "logtime_low",                         # RETIRÉ (07/2026) : on garde seulement
+    #                                        le jackpot de la minute (logtime_minute)
+
     # randominette (aléa trop violent) et seniority_malus (perte passive punitive)
     # : RETIRÉES du jeu (07/2026) — plus aucune logique ni UI, historique conservé.
 }
@@ -140,10 +142,6 @@ def _f(name, label, kind="points"):
 
 
 RULE_FIELDS = {
-    "logtime_low": [_f("max_points", "Points si logtime minimal"),
-                    _f("min_points", "Points si logtime maximal"),
-                    _f("min", "Minutes — borne basse", "value"),
-                    _f("max", "Minutes — borne haute", "value")],
     "bsq_eval": [_f("base", "Points de base"),
                  _f("rand_min", "Aléa min"), _f("rand_max", "Aléa max")],
     "bsq_duration": [_f("lo", "Durée min (minutes)", "value"),
@@ -151,8 +149,7 @@ RULE_FIELDS = {
                      _f("in_points", "Points si dans la fenêtre"),
                      _f("out_points", "Points si hors fenêtre")],
     "logtime_minute": [_f("points", "Jackpot (logtime du jour = 1 min)")],
-    "midnight_bonus": [_f("tiers", "Minutes de log → bonus", "map"),
-                       _f("default", "Points par défaut")],
+    "midnight_bonus": [_f("points", "Bonus fixe (logtime total 23h50–23h59)")],
     "logtime_high": [_f("points", "Malus fixe (>14h)")],
     "reconnect_same_pc": [_f("min", "Malus min"), _f("max", "Malus max")],
     "aura_first_coalition": [_f("min", "Malus min"), _f("max", "Malus max")],
@@ -172,7 +169,7 @@ RULE_FIELDS = {
                        _f("rand_min", "Aléa min"), _f("rand_max", "Aléa max")],
     "assiduity_streak": [_f("factor", "Points par jour consécutif"),
                          _f("cap", "Plafond (jours comptés)", "value")],
-    "project_perfect": [_f("points", "Bonus (note = 100)")],
+    "project_perfect": [_f("points", "Malus (note = 100)")],
     "cluster_bonus": [_f("map", "Cluster → points", "map"),
                       _f("default", "Points par défaut")],
     "exam_time": [_f("min", "Minutes — borne basse", "value"),

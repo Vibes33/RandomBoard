@@ -704,13 +704,29 @@ def api_plague(request):
         return JsonResponse({"stats": None, "points_per_person": None})
 
     if request.method == "GET":
+        cfg = get_config(pool)
         return JsonResponse({"stats": plague_stats(pool),
-                             "points_per_person": float(get_config(pool).plague_payout)})
+                             "points_per_person": float(cfg.plague_payout),
+                             # dedavid board : proba stockée en [0,1], exposée en %.
+                             "secret_board_pct": float(cfg.secret_board_chance) * 100})
+
+    cfg = get_config(pool)
+    data = _json(request)
+
+    # Réglage du dedavid board (%) : indépendant du montant Peste & Choléra.
+    if data.get("secret_board_pct") is not None:
+        try:
+            pct = float(data["secret_board_pct"])
+        except (TypeError, ValueError):
+            return HttpResponseBadRequest("Pourcentage invalide.")
+        pct = max(0.0, min(100.0, pct))
+        cfg.secret_board_chance = _dec(pct / 100)
+        cfg.save(update_fields=["secret_board_chance"])
+        return JsonResponse({"ok": True, "secret_board_pct": float(cfg.secret_board_chance) * 100})
 
     # POST : met à jour les points par personne et rejoue le boost (idempotent).
-    cfg = get_config(pool)
     try:
-        cfg.plague_payout = _dec(_json(request).get("points_per_person"))
+        cfg.plague_payout = _dec(data.get("points_per_person"))
     except (InvalidOperation, TypeError):
         return HttpResponseBadRequest("Nombre de points invalide.")
     cfg.save(update_fields=["plague_payout"])

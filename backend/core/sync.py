@@ -28,6 +28,12 @@ from .models import AppUser, DailyHost, EventLog, Pool, Workstation
 log = logging.getLogger(__name__)
 API = EventLog.Source.API_42
 
+# Règles dont les points dépendent de l'état FINAL de la journée (total de logtime
+# ou présence en fin de journée) : scorées uniquement une fois le jour terminé
+# (à minuit), jamais en cours de journée.
+_LOGTIME_RULES = ("logtime_minute", "logtime_high",
+                  "midnight_bonus", "assiduity_streak")
+
 
 def _parse(s):
     if not s:
@@ -60,9 +66,14 @@ def _presence_set(pool):
     Jours de présence {(user_id, date)} de toute la piscine, en UNE requête.
     Sert au calcul des streaks en mémoire (avant : 1 requête SQL par jour de
     streak × par étudiant × par jour syncé — N+1 massif en fin de piscine).
+
+    Source = events `assiduity_streak` (un par jour OUVRÉ de présence). Depuis le
+    retrait de `logtime_low` (07/2026), c'est le marqueur de présence persistant.
+    `_weekday_streak` ne consulte que les jours ouvrés → équivalent à l'ancien
+    marquage par logtime_low (qui existait aussi le week-end, jamais lu).
     """
     return set(EventLog.objects.filter(
-        pool=pool, event_type="logtime_low", is_voided=False
+        pool=pool, event_type="assiduity_streak", is_voided=False
     ).values_list("user_id", "event_date"))
 
 
@@ -88,7 +99,13 @@ def _weekday_streak(presence, user_id, day):
 # ─────────────────────────────────────────────────────────────
 # MAP : locations → logtime, midnight bonus, reconnexion même PC
 # ─────────────────────────────────────────────────────────────
-def sync_locations(pool, locations, users=None):
+def sync_locations(pool, locations, users=None, *, score_cumulative=True):
+    """
+    score_cumulative=False (jour EN COURS) : on agrège la présence (workstations,
+    cluster, reconnexion — discrets) mais on ne donne AUCUN point de la famille
+    logtime (total non figé). Les points logtime tombent à minuit, quand le jour
+    est final (score_cumulative=True), via tasks.nightly_snapshot.
+    """
     users = users or _users(pool)
     minutes = defaultdict(float)
     hosts = defaultdict(list)
@@ -121,45 +138,46 @@ def sync_locations(pool, locations, users=None):
     for (uid, day), mins in minutes.items():
         u = id_to_user[uid]
         occurred = timezone.make_aware(datetime.combine(day, dtime(12, 0)))
-        _void_daily(u, pool, "logtime_low", day)
-        record_event(user=u, pool=pool, rule_key="logtime_low", occurred_at=occurred,
-                     context={"minutes": round(mins)}, source=API)
-        presence.add((uid, day))
-        created += 1
 
-        # Jackpot de la minute : logtime TOTAL du jour = 1 min pile → gros bonus.
-        # Condition stricte, vérifiée sur l'agrégat journalier (voidé/réécrit à
-        # chaque poll → seul le total de fin de journée compte).
-        _void_daily(u, pool, "logtime_minute", day)
-        if round(mins) == 1:
-            record_event(user=u, pool=pool, rule_key="logtime_minute", occurred_at=occurred,
-                         context={"minutes": round(mins)}, source=API)
-            created += 1
+        # ── Famille logtime : SEULEMENT si le jour est final (score_cumulative) ──
+        if not score_cumulative:
+            # Jour en cours : aucun point logtime, et on retire tout point partiel
+            # éventuellement écrit par un poll précédent (le jour n'est pas figé).
+            for rk in _LOGTIME_RULES:
+                _void_daily(u, pool, rk, day)
+        else:
+            presence.add((uid, day))  # marque la présence du jour (pour l'assiduité)
 
-        # Malus des 14 h : au-delà de 840 min sur la journée → malus FIXE unique
-        # (plus de malus croissant).
-        _void_daily(u, pool, "logtime_high", day)
-        if mins >= 840:
-            record_event(user=u, pool=pool, rule_key="logtime_high", occurred_at=occurred,
-                         context={"minutes": round(mins)}, source=API)
-            created += 1
+            # Jackpot de la minute : logtime TOTAL du jour = 1 min pile → gros bonus.
+            _void_daily(u, pool, "logtime_minute", day)
+            if round(mins) == 1:
+                record_event(user=u, pool=pool, rule_key="logtime_minute", occurred_at=occurred,
+                             context={"minutes": round(mins)}, source=API)
+                created += 1
 
-        # bonus « logtime quasi-plein », en paliers (évaluateur tiers) :
-        # ≥ 20 h (1200 min) → palier intermédiaire ; ≥ 23h50 (1430) → gros bonus.
-        if round(mins) >= 1200:
+            # Malus des 14 h : au-delà de 840 min sur la journée → malus FIXE unique.
+            _void_daily(u, pool, "logtime_high", day)
+            if mins >= 840:
+                record_event(user=u, pool=pool, rule_key="logtime_high", occurred_at=occurred,
+                             context={"minutes": round(mins)}, source=API)
+                created += 1
+
+            # Bonus « minuit » : logtime TOTAL du jour entre 23h50 et 23h59 (1430–
+            # 1439 min, soit quasi 24 h de log) → points FIXES (config).
             _void_daily(u, pool, "midnight_bonus", day)
-            record_event(user=u, pool=pool, rule_key="midnight_bonus", occurred_at=occurred,
-                         context={"minutes": round(mins)}, source=API)
-            created += 1
+            if 1430 <= round(mins) <= 1439:
+                record_event(user=u, pool=pool, rule_key="midnight_bonus", occurred_at=occurred,
+                             context={"minutes": round(mins)}, source=API)
+                created += 1
 
-        # assiduité : jours ouvrés consécutifs (week-ends neutres) — le jour
-        # même compte car logtime_low vient d'être écrit ci-dessus.
-        if day.weekday() < 5:
-            streak = _weekday_streak(presence, uid, day)
-            _void_daily(u, pool, "assiduity_streak", day)
-            record_event(user=u, pool=pool, rule_key="assiduity_streak", occurred_at=occurred,
-                         context={"streak": streak}, source=API)
-            created += 1
+            # assiduité : jours ouvrés consécutifs (week-ends neutres) — le jour
+            # même compte car sa présence vient d'être ajoutée ci-dessus.
+            if day.weekday() < 5:
+                streak = _weekday_streak(presence, uid, day)
+                _void_daily(u, pool, "assiduity_streak", day)
+                record_event(user=u, pool=pool, rule_key="assiduity_streak", occurred_at=occurred,
+                             context={"streak": streak}, source=API)
+                created += 1
 
         # cluster où l'élève est assis (points via la table configurée)
         cluster = _cluster_of(hosts[(uid, day)])
@@ -400,14 +418,20 @@ def sync_last_day(pool, day, pairs, users=None):
     return created
 
 
-def sync_all(pool, data):
+def sync_all(pool, data, *, score_cumulative=False):
+    """
+    Ingestion « jour courant » (poll live). score_cumulative=False par défaut :
+    le logtime N'EST PAS scoré tant que le jour n'est pas terminé (il tombera à
+    minuit, cf. tasks.nightly_snapshot). Le mode démo peut forcer True pour
+    montrer le logtime immédiatement.
+    """
     from .chaos import spread_plague
     users = _users(pool)
     pairs = data.get("pairs", [])
     locations = data.get("locations", [])
     today = timezone.localdate()
     return {
-        "locations": sync_locations(pool, locations, users),
+        "locations": sync_locations(pool, locations, users, score_cumulative=score_cumulative),
         "feedbacks": sync_feedbacks(pool, data.get("feedbacks", []), users),
         "evaluations": sync_evaluations(pool, data.get("evaluations", []), users),
         "flags": sync_flags(pool, data.get("flags", []), users),

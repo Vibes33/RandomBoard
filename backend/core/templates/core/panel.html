@@ -208,6 +208,12 @@
 
   <section class="pane" id="p-users">
     <div class="sec">Classement &amp; ajustement manuel des scores</div>
+    <div class="bar">
+      <span class="sec" style="margin:0">Rechercher</span>
+      <input id="u-search" placeholder="login ou nom…" style="width:220px" autocomplete="off">
+      <button class="mini ghost" id="u-clear">✕</button>
+      <span class="calc" id="u-count"></span>
+    </div>
     <div class="card"><table><thead><tr>
       <th class="rk">#</th><th>Login</th><th>Nom</th><th class="num">Score</th><th style="width:340px">Ajuster (raison obligatoire)</th>
     </tr></thead><tbody id="users-tb"><tr><td colspan="5" class="spin">Chargement…</td></tr></tbody></table></div>
@@ -227,6 +233,12 @@
 
   <section class="pane" id="p-points">
     <div class="sec">Range de points de base &amp; range du multiplicateur journalier — par event</div>
+    <div class="bar">
+      <span class="sec" style="margin:0">Rechercher</span>
+      <input id="pt-search" placeholder="nom, clé ou catégorie (gain/perte/event)…" style="width:280px" autocomplete="off">
+      <button class="mini ghost" id="pt-clear">✕</button>
+      <span class="calc" id="pt-count"></span>
+    </div>
     <div class="bento" id="points-b"><div class="spin">Chargement…</div></div>
   </section>
 
@@ -326,6 +338,13 @@
       <input type="number" id="pl-points" style="width:110px">
       <button class="mini" id="pl-save">💾 Enregistrer</button>
       <span class="calc" id="pl-payday"></span>
+    </div>
+
+    <div class="bar" style="margin-top:14px">
+      <span class="sec" style="margin:0">🥷 dedavid board — proba d'apparition (%)</span>
+      <input type="number" id="pl-secret" step="0.5" min="0" max="100" style="width:110px">
+      <button class="mini" id="pl-secret-save">💾 Enregistrer</button>
+      <span class="calc">chance qu'un <code>curl</code> affiche tous les pseudos en « dedavid »</span>
     </div>
 
     <div class="sec" style="margin-top:22px">Infections récentes</div>
@@ -449,17 +468,28 @@ async function activatePool(id){
   setTimeout(()=>location.reload(),700);
 }
 
-/* ── 1. Users ── */
+/* ── 1. Users (avec recherche live login/nom) ── */
+let usersCache=[];
 async function loadUsers(){
   const {users}=await api('/panel/api/users');
+  usersCache=users;
+  const s=$('#u-search'); s.oninput=renderUsers;
+  $('#u-clear').onclick=()=>{s.value='';renderUsers();s.focus();};
+  renderUsers();
+}
+function renderUsers(){
+  const q=($('#u-search').value||'').trim().toLowerCase();
+  const list=q?usersCache.filter(u=>
+    (u.login||'').toLowerCase().includes(q)||(u.name||'').toLowerCase().includes(q)):usersCache;
   const tb=$('#users-tb');
-  tb.innerHTML=users.length?users.map(u=>`<tr class="urow" data-user="${u.id}">
+  tb.innerHTML=list.length?list.map(u=>`<tr class="urow" data-user="${u.id}">
     <td class="rk">${u.rank}</td><td><b>${esc(u.login)}</b></td><td class="meta">${esc(u.name||'')}</td>
     <td class="num">${money(u.total)}</td>
     <td><input type="number" placeholder="± pts" style="width:74px" id="adj-${u.id}">
         <input placeholder="raison…" style="width:170px" id="rsn-${u.id}" maxlength="120">
         <button class="mini" data-adj="${u.id}">OK</button></td></tr>`).join('')
-    :'<tr><td colspan="5" class="empty">Aucun étudiant.</td></tr>';
+    :`<tr><td colspan="5" class="empty">${q?'Aucun résultat.':'Aucun étudiant.'}</td></tr>`;
+  $('#u-count').textContent=q?`${list.length} / ${usersCache.length}`:`${usersCache.length}`;
   tb.querySelectorAll('[data-adj]').forEach(b=>b.onclick=e=>{e.stopPropagation();adjust(b.dataset.adj);});
   tb.querySelectorAll('input[id^=adj-],input[id^=rsn-]').forEach(i=>i.onclick=e=>e.stopPropagation());
   tb.querySelectorAll('.urow').forEach(r=>r.onclick=()=>openProfile(r.dataset.user));
@@ -531,12 +561,23 @@ function renderLogs(logs){
     :'<tr><td colspan="6" class="empty">Aucun log.</td></tr>';
 }
 
-/* ── 3. Options de Points (schéma dynamique : tous les points éditables) ── */
+/* ── 3. Options de Points (schéma dynamique + recherche live) ── */
+let pointsCache=[];
+const CAT_FR={gain:'gain',loss:'perte',event:'événement event'};  // alias FR pour la recherche
 async function loadPoints(){
   const {rules}=await api('/panel/api/points');
+  pointsCache=rules;
+  const s=$('#pt-search'); s.oninput=renderPoints;
+  $('#pt-clear').onclick=()=>{s.value='';renderPoints();s.focus();};
+  renderPoints();
+}
+function renderPoints(){
+  const q=($('#pt-search').value||'').trim().toLowerCase();
+  const list=q?pointsCache.filter(r=>
+    `${r.label} ${r.key} ${r.category} ${CAT_FR[r.category]||''}`.toLowerCase().includes(q)):pointsCache;
   const b=$('#points-b');
-  b.innerHTML=rules.length?rules.map(r=>`<div class="box">
-    <div class="title">${r.label}</div><div class="key">${r.key} ${chip(r.category)}</div>
+  b.innerHTML=list.length?list.map(r=>`<div class="box">
+    <div class="title">${esc(r.label)}</div><div class="key">${esc(r.key)} ${chip(r.category)}</div>
     ${r.fields.map(f=>renderField(f)).join('')||'<div class="calc">Points fournis à la volée (rien à régler ici).</div>'}
     <div class="row-in"><label>Range multiplic.</label>
       <input type="number" step="0.1" id="mmin-${r.id}" value="${r.mult_min}">
@@ -544,7 +585,8 @@ async function loadPoints(){
       <input type="number" step="0.1" id="mmax-${r.id}" value="${r.mult_max}"></div>
     <div class="foot"><button class="mini" data-save="${r.id}">💾 Sauvegarder</button>
       <span class="ok" id="ok-${r.id}">✓ enregistré</span></div>
-  </div>`).join(''):'<div class="empty">Aucune règle active.</div>';
+  </div>`).join(''):`<div class="empty">${q?'Aucune règle ne correspond.':'Aucune règle active.'}</div>`;
+  $('#pt-count').textContent=q?`${list.length} / ${pointsCache.length}`:`${pointsCache.length}`;
   b.onclick=onPointsClick;
 }
 function renderField(f){
@@ -740,9 +782,9 @@ async function cancelSync(){
 }
 
 /* ── 7. Peste & Choléra ── */
-async function initPlague(){ $('#pl-save').onclick=savePlague; loadPlague(); }
+async function initPlague(){ $('#pl-save').onclick=savePlague; $('#pl-secret-save').onclick=saveSecret; loadPlague(); }
 async function loadPlague(){
-  const {stats,points_per_person}=await api('/panel/api/plague');
+  const {stats,points_per_person,secret_board_pct}=await api('/panel/api/plague');
   if(!stats){$('#pl-title').textContent='Aucune piscine active.';return;}
   $('#pl-inf').textContent=stats.infected;$('#pl-healthy').textContent=stats.healthy;
   $('#pl-total').textContent=stats.total;
@@ -755,6 +797,7 @@ async function loadPlague(){
   $('#pl-peste').innerHTML=grp(stats.peste);$('#pl-cholera').innerHTML=grp(stats.cholera);
   $('#pl-payday').textContent='Boost versé le '+stats.payout_day+' (1 j avant l\'exam final).';
   if(points_per_person!=null && document.activeElement!==$('#pl-points'))$('#pl-points').value=points_per_person;
+  if(secret_board_pct!=null && document.activeElement!==$('#pl-secret'))$('#pl-secret').value=secret_board_pct;
   $('#pl-recent').innerHTML=stats.recent.length?stats.recent.map(r=>`<div class="host">
     <span class="hn">${esc(r.login)} ${r.zero?'⭐':''}</span>
     <span class="meta"><span class="badge ${r.disease==='peste'?'done':'running'}">${r.disease}</span> ${r.source?('← '+esc(r.source)):'patient zéro'}</span></div>`).join('')
@@ -764,6 +807,12 @@ async function savePlague(){
   const b=$('#pl-save');b.disabled=true;
   try{await api('/panel/api/plague','POST',{points_per_person:$('#pl-points').value});
     toast('Points par personne enregistrés + boost recalculé');loadPlague();}
+  finally{b.disabled=false;}
+}
+async function saveSecret(){
+  const b=$('#pl-secret-save');b.disabled=true;
+  try{const r=await api('/panel/api/plague','POST',{secret_board_pct:$('#pl-secret').value});
+    toast(`dedavid board réglé à ${r.secret_board_pct}%`);loadPlague();}
   finally{b.disabled=false;}
 }
 

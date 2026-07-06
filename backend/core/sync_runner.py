@@ -19,7 +19,7 @@ from django.conf import settings
 from django.utils.text import slugify
 
 from .ft_api import NETWORK_ERRORS, FtRateLimit, FtServerError
-from .models import DailyDesignation, Pool
+from .models import DailyDesignation, DailySnapshot, Pool
 from .services import snapshot_day
 from .sync import (
     fetch_campus_users, fetch_day, fetch_exam_windows, sync_evaluations,
@@ -108,6 +108,8 @@ def run_full_sync(*, client, pool, campus, cursus, d_from=None, d_to=None,
     # 3) rejeu par CHUNKS de jours : le FETCH (I/O, lent) est parallélisé, mais
     #    l'INGESTION reste séquentielle et ordonnée pour préserver la somme
     #    cumulée des snapshots (cumulative(J) = cumulative(J-1) + jour_J).
+    from django.utils import timezone
+    today = timezone.localdate()  # un jour n'est FINAL (logtime + clôture) que s'il est < aujourd'hui
     total_days = (d_to - d_from).days + 1
     days = [d_from + dt.timedelta(days=i) for i in range(total_days)]
     workers = max(2, min(8, len(client.keys) * 2))  # calé sur le pool de clés
@@ -154,7 +156,9 @@ def run_full_sync(*, client, pool, campus, cursus, d_from=None, d_to=None,
                 log(f"{d} · API indisponible ({p}) — jour ignoré")
                 prog(day=d, index=idx, total=total_days, events=total_events)
                 continue
-            n = (sync_locations(pool, p["locations"], users)
+            final = d < today  # jour terminé → logtime + clôture ; sinon (jour
+            #                     courant/futur) : seulement les events discrets.
+            n = (sync_locations(pool, p["locations"], users, score_cumulative=final)
                  + sync_feedbacks(pool, p["feedbacks"], users)
                  + sync_evaluations(pool, p["evaluations"], users)
                  + sync_flags(pool, p["flags"], users)
@@ -163,20 +167,26 @@ def run_full_sync(*, client, pool, campus, cursus, d_from=None, d_to=None,
                  + sync_last_day(pool, d, p.get("pairs", []), users))
             from .chaos import spread_plague
             spread_plague(pool, p.get("pairs", []))  # propagation Peste & Choléra
-            # Contenu quotidien dérivé — même pipeline que le live (daily_derived
-            # + nightly) : élus du jour, aura, puis effets des élus calculés sur
-            # les gains du jour, et la taxe du podium.
-            from .derived import (apply_aura_penalty, apply_designation_effects,
-                                  apply_podium_tax, assign_daily_designations)
-            if not DailyDesignation.objects.filter(pool=pool, day=d).exists():
-                assign_daily_designations(pool, d)  # déterministe par (pool, jour)
-            apply_aura_penalty(pool, d)
-            apply_designation_effects(pool, d)
-            apply_podium_tax(pool, d)  # top 3 → bottom 10 (zéro-somme)
-            snapshot_day(pool, d)  # fige le jour, comme le cron de minuit
+            if final:
+                # Clôture — même pipeline que le cron de minuit : élus du jour,
+                # aura, effets des élus (sur les gains du jour), taxe du podium,
+                # puis snapshot. UNIQUEMENT pour un jour terminé.
+                from .derived import (apply_aura_penalty, apply_designation_effects,
+                                      apply_podium_tax, assign_daily_designations)
+                if not DailyDesignation.objects.filter(pool=pool, day=d).exists():
+                    assign_daily_designations(pool, d)  # déterministe par (pool, jour)
+                apply_aura_penalty(pool, d)
+                apply_designation_effects(pool, d)
+                apply_podium_tax(pool, d)  # top 3 → bottom 10 (zéro-somme)
+                snapshot_day(pool, d)  # fige le jour
+            else:
+                # Jour NON final : jamais de snapshot (le classement l'ajoute en
+                # live). On purge un éventuel snapshot périmé (ancien fetch qui
+                # traitait le jour courant comme fini → double comptage).
+                DailySnapshot.objects.filter(pool=pool, day=d).delete()
             total_events += n
             log(f"{d} · {len(p['locations'])} loc / {len(p['feedbacks'])} fb / "
-                f"{len(p['evaluations'])} év → {n} events")
+                f"{len(p['evaluations'])} év → {n} events{'' if final else ' (jour en cours)'}")
             prog(day=d, index=idx, total=total_days, events=total_events)
         if cancelled:
             break

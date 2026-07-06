@@ -451,6 +451,12 @@ class PoolConfig(models.Model):
     # plus nombreuse — X points PAR PERSONNE (seul réglage).
     plague_seeded = models.BooleanField(default=False)
     plague_payout = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal("400"))
+    # Easter egg « dedavid board » : probabilité [0,1] qu'un appel curl affiche
+    # le Leaderboard Secret (tous les pseudos → dedavid). Réglable au panel.
+    secret_board_chance = models.DecimalField(
+        max_digits=5, decimal_places=4, default=Decimal("0.01"),
+        help_text="Proba (0–1) du dedavid board à chaque curl. 0.01 = 1 %.",
+    )
 
     def __str__(self):
         return f"Config · {self.pool.slug}"

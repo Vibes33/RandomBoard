@@ -33,4 +33,9 @@ urlpatterns = [
     path("healthz", healthz),
     # Aperçu curl-able (logique de score complète = étape 3)
     path("leaderboard", leaderboard_preview),
+    # Catch-all EN DERNIER : curl monsite.com/<login> → leaderboard avec ce
+    # pseudo en surbrillance. Placé après toutes les vraies routes pour ne rien
+    # masquer (panel/, healthz, leaderboard sont résolus avant).
+    path("<str:login>", root),
+    path("<str:login>/", root),
 ]
