@@ -126,8 +126,20 @@ def sync_locations(pool, locations, users=None):
                      context={"minutes": round(mins)}, source=API)
         presence.add((uid, day))
         created += 1
-        if mins >= 720:  # logtime haut (≥12h)
-            _void_daily(u, pool, "logtime_high", day)
+
+        # Jackpot de la minute : logtime TOTAL du jour = 1 min pile → gros bonus.
+        # Condition stricte, vérifiée sur l'agrégat journalier (voidé/réécrit à
+        # chaque poll → seul le total de fin de journée compte).
+        _void_daily(u, pool, "logtime_minute", day)
+        if round(mins) == 1:
+            record_event(user=u, pool=pool, rule_key="logtime_minute", occurred_at=occurred,
+                         context={"minutes": round(mins)}, source=API)
+            created += 1
+
+        # Malus des 14 h : au-delà de 840 min sur la journée → malus FIXE unique
+        # (plus de malus croissant).
+        _void_daily(u, pool, "logtime_high", day)
+        if mins >= 840:
             record_event(user=u, pool=pool, rule_key="logtime_high", occurred_at=occurred,
                          context={"minutes": round(mins)}, source=API)
             created += 1

@@ -94,14 +94,6 @@ def ev_random_modifier(params, ctx, rng):
     return _d(base + delta), {"delta": round(delta, 2)}
 
 
-def ev_probability(params, ctx, rng):
-    """Avec proba p : points ; sinon else_points (ex: Randominette)."""
-    roll = rng.random()
-    hit = roll < float(params["proba"])
-    pts = params["points"] if hit else params.get("else_points", 0)
-    return _d(pts), {"roll": round(roll, 4), "hit": hit}
-
-
 def ev_threshold_window(params, ctx, rng):
     """Dans [lo,hi] → in_points, sinon out_points (ex: durée éval BSQ 30–60 min)."""
     v = _num(ctx, params)
@@ -209,7 +201,6 @@ EVALUATORS = {
     "linear_decay": ev_linear_decay,
     "linear_growth": ev_linear_growth,
     "random_modifier": ev_random_modifier,
-    "probability": ev_probability,
     "threshold_window": ev_threshold_window,
     "multiplier": ev_multiplier,
     "time_window_bonus": ev_time_window_bonus,

@@ -104,12 +104,11 @@ def nightly_snapshot():
     Piscine active, puis verrouille son coefficient. Idempotent & rejouable.
     """
     from .chaos import apply_stacking
-    from .derived import apply_designation_effects, apply_podium_tax, apply_seniority
+    from .derived import apply_designation_effects, apply_podium_tax
     yesterday = timezone.localdate() - timedelta(days=1)
     summary = {}
     for pool in Pool.objects.filter(is_active=True):
         apply_stacking(pool, yesterday)  # malus stacking sur le jour clôturé (opt-in)
-        apply_seniority(pool, yesterday)  # ancienneté : présents du jour clôturé
         apply_designation_effects(pool, yesterday)  # ± % des gains des élus du jour
         apply_podium_tax(pool, yesterday)  # rubber-banding top 3 → bottom 10
         count = snapshot_day(pool, yesterday)
@@ -126,11 +125,11 @@ def daily_derived():
       - multiplicateurs par event (DailyEventMultiplier, only_missing = respecte
         un réglage manuel),
       - places Bénites/Maudites du jour,
-      puis ancienneté & aura.
+      puis aura.
     """
     from .chaos import plague_endgame, seed_plague
-    from .derived import (apply_aura_penalty, apply_randominette,
-                          assign_daily_designations, randomize_daily_hosts)
+    from .derived import (apply_aura_penalty, assign_daily_designations,
+                          randomize_daily_hosts)
     from .services import randomize_day_multipliers
     today = timezone.localdate()
     out = {}
@@ -142,14 +141,11 @@ def daily_derived():
         mults = randomize_day_multipliers(pool, today, reseed=True, only_missing=True)
         hosts = randomize_daily_hosts(pool, today)
         desig = assign_daily_designations(pool, today)   # Maudits/Bénis DU JOUR
-        rando = apply_randominette(pool, today)          # comeback moitié basse
-        # seniority : déplacée dans nightly_snapshot (présence du jour connue à la clôture)
-        weeks = max(0, (today - pool.starts_on).days // 7)
         auras = apply_aura_penalty(pool)
         entry = {"multiplicateurs": mults,
                  "places": len(hosts["shiny"]) + len(hosts["cursed"]),
                  "designations": len(desig["cursed"]) + len(desig["blessed"]),
-                 "randominette": rando, "semaines": weeks, "auras": auras}
+                 "auras": auras}
         # boost Peste & Choléra : 1 jour avant l'exam final
         if today == pool.ends_on - timedelta(days=1):
             entry["plague_endgame"] = plague_endgame(pool)

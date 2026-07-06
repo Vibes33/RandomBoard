@@ -22,6 +22,8 @@ RULES = [
     ("logtime_low", "gain", "Logtime bas (1min–5h)",
      {"type": "linear_decay", "value_key": "minutes", "min": 1, "max": 300,
       "max_points": 200, "min_points": 0}),
+    ("logtime_minute", "gain", "Jackpot de la minute (logtime du jour = 1 min pile)",
+     {"type": "fixed", "points": 1000}),
     ("kw_quoi_feur", "gain", 'Feedback contient "quoi feur"',
      {"type": "fixed", "min": 40, "max": 60}),
     ("curl_leaderboard", "gain", "curl sur le leaderboard",
@@ -43,15 +45,12 @@ RULES = [
     ("midnight_bonus", "gain", "Logtime quasi-plein (paliers : 20h / 23h50)",
      {"type": "tiers", "value_key": "minutes", "default": 0,
       "tiers": {"1200": 100, "1430": 300}}),
-    ("randominette", "event", "Randominette (pile ou face, moitié basse du classement)",
-     {"type": "probability", "proba": 0.5, "points": 150, "else_points": -25}),
     ("kw_quoi_sans_feur", "loss", 'Feedback "quoi" sans "feur" / "coubeh"',
      {"type": "fixed", "min": -50, "max": -30, "rank_penalty": 1}),
     ("reconnect_same_pc", "loss", "Reco sur le MÊME pc dans la journée",
      {"type": "fixed", "min": -20, "max": -10}),
-    ("logtime_high", "loss", "Logtime haut (12h–24h)",
-     {"type": "linear_growth", "value_key": "minutes", "min": 720, "max": 1440,
-      "max_malus": -300}),
+    ("logtime_high", "loss", "Logtime > 14h (malus fixe du jour)",
+     {"type": "fixed", "points": -200}),
     ("aura_first_coalition", "loss", "1er de sa coalition (perte d'aura)",
      {"type": "fixed", "min": -1200, "max": -800}),
     ("last_day_corrections", "event", "Dernier jour : points par correction donnée",
@@ -65,8 +64,6 @@ RULES = [
      {"type": "weighted", "points": -120}),
     ("binome_blessed", "gain", "Malédiction binôme — Béni (×2 si croisé)",
      {"type": "weighted", "points": 120}),
-    ("seniority_malus", "loss", "Malus d'ancienneté (présents du jour, croît avec les semaines)",
-     {"type": "linear_growth", "value_key": "weeks", "min": 0, "max": 4, "max_malus": -50}),
     ("config_weekend", "event", "[config] coefficient du week-end",
      {"type": "fixed", "points": 0, "factor": 0.5}),
     # ─── mots-clés feedbacks (configurable : ajoute un mot = édite la règle) ───
@@ -99,8 +96,8 @@ RULES = [
     # ─── nouvelles règles (étape 4.1) ───
     ("assiduity_streak", "gain", "Assiduité : jours consécutifs (week-ends neutres, capé à 7 j)",
      {"type": "multiplier", "value_key": "streak", "factor": 10, "cap": 7}),
-    ("project_perfect", "gain", "Projet validé pile à 100 (bonus)",
-     {"type": "fixed", "points": 150}),
+    ("project_perfect", "gain", "Projet validé pile à 100 (bonus nerfé)",
+     {"type": "fixed", "points": 30}),
     ("cluster_bonus", "event", "Bonus/malus selon le cluster où l'élève est assis",
      {"type": "map_lookup", "key_field": "cluster", "default": 0,
       "map": {"c1": 15, "c2": 0, "c3": -10}}),
@@ -127,9 +124,8 @@ INACTIVE_RULES = {
     "kw_quoi_feur", "kw_quoi_sans_feur",   # doublons de feedback_keywords
     "curl_leaderboard",                    # inattribuable (pas d'auth sur le curl)
     "config_weekend", "config_daily",      # porte-config de l'ancien modèle
-    # randominette / exam_time / last_day_corrections : RÉACTIVÉES (audit 07/2026)
-    # et câblées — randominette moitié basse, exam via overlap locations,
-    # last_day via corrections données le dernier jour.
+    # randominette (aléa trop violent) et seniority_malus (perte passive punitive)
+    # : RETIRÉES du jeu (07/2026) — plus aucune logique ni UI, historique conservé.
 }
 
 
@@ -154,20 +150,16 @@ RULE_FIELDS = {
                      _f("hi", "Durée max (minutes)", "value"),
                      _f("in_points", "Points si dans la fenêtre"),
                      _f("out_points", "Points si hors fenêtre")],
+    "logtime_minute": [_f("points", "Jackpot (logtime du jour = 1 min)")],
     "midnight_bonus": [_f("tiers", "Minutes de log → bonus", "map"),
                        _f("default", "Points par défaut")],
-    "logtime_high": [_f("min", "Minutes — borne basse", "value"),
-                     _f("max", "Minutes — borne haute", "value"),
-                     _f("max_malus", "Malus maximal")],
+    "logtime_high": [_f("points", "Malus fixe (>14h)")],
     "reconnect_same_pc": [_f("min", "Malus min"), _f("max", "Malus max")],
     "aura_first_coalition": [_f("min", "Malus min"), _f("max", "Malus max")],
     "shiny_host": [_f("min", "Bonus min"), _f("max", "Bonus max")],
     "cursed_host": [_f("min", "Malus min"), _f("max", "Malus max")],
     "binome_cursed": [_f("points", "Points (Maudit)")],
     "binome_blessed": [_f("points", "Points (Béni)")],
-    "seniority_malus": [_f("min", "Semaines — borne basse", "value"),
-                        _f("max", "Semaines — borne haute", "value"),
-                        _f("max_malus", "Malus maximal")],
     "feedback_keywords": [_f("map", "Mots-clés → points", "map"),
                           _f("quoi_alone_points", "« quoi » seul"),
                           _f("coubeh_points", "« coubeh »")],
@@ -183,9 +175,6 @@ RULE_FIELDS = {
     "project_perfect": [_f("points", "Bonus (note = 100)")],
     "cluster_bonus": [_f("map", "Cluster → points", "map"),
                       _f("default", "Points par défaut")],
-    "randominette": [_f("proba", "Probabilité de gagner", "proba"),
-                     _f("points", "Points si gagné"),
-                     _f("else_points", "Points si perdu")],
     "exam_time": [_f("min", "Minutes — borne basse", "value"),
                   _f("max", "Minutes — borne haute", "value"),
                   _f("max_points", "Points maximum")],

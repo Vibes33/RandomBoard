@@ -155,26 +155,6 @@ def apply_podium_tax(pool, day):
     return created
 
 
-def apply_randominette(pool, day):
-    """
-    Randominette (mécanisme de comeback) : pile ou face quotidien pour la
-    MOITIÉ BASSE du classement (à J-1) — pile +points, face else_points.
-    Dedup par (login, jour) → idempotente au re-sync (pas de re-tirage).
-    """
-    board = standings(pool, include_today=False)  # classement figé à J-1
-    if len(board) < 4:
-        return 0
-    bottom = {r["login"] for r in board[len(board) // 2:]}
-    users = AppUser.objects.filter(pool=pool, is_active=True, login__in=bottom)
-    created = 0
-    for u in users:
-        if record_event(user=u, pool=pool, rule_key="randominette",
-                        occurred_at=_noon(day), context={}, source=SYSTEM,
-                        dedup_key=f"rando:{u.login}:{day.isoformat()}"):
-            created += 1
-    return created
-
-
 def assign_designations(pool, n_cursed=1, n_blessed=1, when=None, seed=None):
     """[legacy] Désignait des Maudits / Bénis pour la SEMAINE (remplacé par le
     tirage quotidien assign_daily_designations)."""
@@ -249,32 +229,6 @@ def apply_aura_penalty(pool, day=None):
                      occurred_at=_noon(day), context={}, source=SYSTEM)
         created += 1
     return created
-
-
-# ─────────────────────────────────────────────────────────────
-# Malus d'ancienneté (croît avec les semaines de Piscine)
-# ─────────────────────────────────────────────────────────────
-def apply_seniority(pool, day=None):
-    """
-    Malus d'ancienneté — UNIQUEMENT pour les étudiants PRÉSENTS ce jour-là
-    (avant : il frappait aussi les absents, qui coulaient à −1800 sans jamais
-    venir). Doit être appliqué à la CLÔTURE du jour (présence connue) :
-    nightly_snapshot en live, pipeline quotidien en rejeu.
-    """
-    day = day or timezone.localdate()
-    weeks = max(0, (day - pool.starts_on).days // 7)
-    present = set(EventLog.objects.filter(
-        pool=pool, event_date=day, event_type="logtime_low", is_voided=False
-    ).values_list("user_id", flat=True))
-    created = 0
-    for u in AppUser.objects.filter(pool=pool, is_active=True):
-        _void_daily(u, pool, "seniority_malus", day)  # nettoie aussi les absents
-        if u.id not in present:
-            continue
-        record_event(user=u, pool=pool, rule_key="seniority_malus", occurred_at=_noon(day),
-                     context={"weeks": weeks}, source=SYSTEM)
-        created += 1
-    return weeks, created
 
 
 # ─────────────────────────────────────────────────────────────

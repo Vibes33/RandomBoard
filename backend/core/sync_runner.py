@@ -164,15 +164,12 @@ def run_full_sync(*, client, pool, campus, cursus, d_from=None, d_to=None,
             from .chaos import spread_plague
             spread_plague(pool, p.get("pairs", []))  # propagation Peste & Choléra
             # Contenu quotidien dérivé — même pipeline que le live (daily_derived
-            # + nightly) : élus du jour, randominette (moitié basse), ancienneté,
-            # aura, puis effets des élus calculés sur les gains du jour.
+            # + nightly) : élus du jour, aura, puis effets des élus calculés sur
+            # les gains du jour, et la taxe du podium.
             from .derived import (apply_aura_penalty, apply_designation_effects,
-                                  apply_podium_tax, apply_randominette,
-                                  apply_seniority, assign_daily_designations)
+                                  apply_podium_tax, assign_daily_designations)
             if not DailyDesignation.objects.filter(pool=pool, day=d).exists():
                 assign_daily_designations(pool, d)  # déterministe par (pool, jour)
-            n += apply_randominette(pool, d)
-            apply_seniority(pool, d)
             apply_aura_penalty(pool, d)
             apply_designation_effects(pool, d)
             apply_podium_tax(pool, d)  # top 3 → bottom 10 (zéro-somme)
