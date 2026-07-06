@@ -177,12 +177,13 @@ def recompute_from(pool, from_day, upto=None):
     return days
 
 
-def reapply_rule_points(pool, rule, upto=None):
+def reapply_rule_points(rule, upto=None):
     """
-    Réapplique les paramètres ACTUELS d'une règle à TOUS ses events passés (non
-    annulés) de la piscine, puis recalcule snapshots + classement. Sert quand le
-    staff édite les points d'une règle : le passé ET le classement sont mis à
-    jour, plus seulement les futurs events.
+    Réapplique les paramètres ACTUELS d'une règle à TOUS ses logs (events non
+    annulés, TOUTES piscines confondues), puis recalcule les snapshots +
+    classement de chaque piscine touchée. Sert quand le staff édite les points
+    d'une règle : chaque log historique est revu et corrigé, plus seulement les
+    futurs events.
 
     Le hasard reste FIGÉ : on ne relance jamais les dés. Pour les règles
     aléatoires on réutilise le tirage stocké (random_roll) —
@@ -190,13 +191,14 @@ def reapply_rule_points(pool, rule, upto=None):
       - fixed [min,max]  : on conserve la valeur tirée (la range n'affecte que
         les futurs events).
     Les règles déterministes (fixed points, tiers, map, seuils, facteurs…) sont
-    simplement ré-évaluées avec les nouveaux paramètres.
+    ré-évaluées avec les nouveaux paramètres.
     """
     from .engine import _d, evaluate
+    from .models import Pool
     version = rule.current_version
-    events = list(EventLog.objects.filter(pool=pool, rule=rule, is_voided=False))
+    events = list(EventLog.objects.filter(rule=rule, is_voided=False))
     if not version or not events:
-        return {"updated": 0, "days": 0}
+        return {"updated": 0, "days": 0, "pools": 0}
 
     params = version.params or {}
     etype = params.get("type", "fixed")
@@ -204,6 +206,7 @@ def reapply_rule_points(pool, rule, upto=None):
     is_fixed_range = etype == "fixed" and params.get("min") is not None
 
     updated = []
+    first_day = {}  # pool_id → 1er jour touché (borne du recompute)
     for e in events:
         roll = e.random_roll or {}
         if is_rand_mod and "delta" in roll:
@@ -216,11 +219,16 @@ def reapply_rule_points(pool, rule, upto=None):
             e.raw_points = new_pts
             e.rule_version = version.version
             updated.append(e)
+            d = first_day.get(e.pool_id)
+            if d is None or e.event_date < d:
+                first_day[e.pool_id] = e.event_date
 
     if updated:
         EventLog.objects.bulk_update(updated, ["raw_points", "rule_version"], batch_size=500)
-    days = recompute_from(pool, min(e.event_date for e in events), upto=upto)
-    return {"updated": len(updated), "days": len(days)}
+    total_days = 0
+    for pool in Pool.objects.filter(id__in=first_day):
+        total_days += len(recompute_from(pool, first_day[pool.id], upto=upto))
+    return {"updated": len(updated), "days": total_days, "pools": len(first_day)}
 
 
 def backfill(pool):

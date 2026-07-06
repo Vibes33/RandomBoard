@@ -456,9 +456,7 @@ def api_points(request):
         except (TypeError, ValueError):
             return HttpResponseBadRequest("Valeur de paramètre invalide.")
         new_rule_version(rule, params, user=request.user)
-        pool = _pool()
-        if pool:
-            recomputed = reapply_rule_points(pool, rule)
+        recomputed = reapply_rule_points(rule)  # tous les logs, toutes piscines
     return JsonResponse({"ok": True, **recomputed})
 
 
