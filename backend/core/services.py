@@ -205,26 +205,55 @@ def reapply_rule_points(rule, upto=None):
     is_rand_mod = etype == "random_modifier"
     is_fixed_range = etype == "fixed" and params.get("min") is not None
 
+    def _luck(e):
+        """
+        Fraction de chance [0,1] figée de l'event. Stockée depuis peu (`luck`) ;
+        pour les anciens events sans `luck`, on la dérive de façon DÉTERMINISTE
+        de l'id (stable dans le temps) — on ne relance donc jamais aléatoirement.
+        """
+        r = e.random_roll or {}
+        if r.get("luck") is not None:
+            return float(r["luck"])
+        return random.Random(f"{rule.key}:{e.id}").random()
+
     updated = []
     first_day = {}  # pool_id → 1er jour touché (borne du recompute)
     for e in events:
-        roll = e.random_roll or {}
-        if is_rand_mod and "delta" in roll:
-            new_pts = _d(float(params.get("base", 0)) + float(roll["delta"]))
-        elif is_fixed_range and "rolled" in roll:
-            new_pts = _d(roll["rolled"])          # tirage figé : range = futur only
+        new_roll = None
+        if is_fixed_range:
+            frac = _luck(e)
+            lo, hi = float(params["min"]), float(params["max"])
+            val = lo + frac * (hi - lo)
+            new_pts = _d(val)
+            new_roll = {"rolled": round(val, 2), "luck": round(frac, 6)}
+        elif is_rand_mod:
+            frac = _luck(e)
+            lo, hi = float(params.get("rand_min", 0)), float(params.get("rand_max", 0))
+            delta = lo + frac * (hi - lo)
+            new_pts = _d(float(params.get("base", 0)) + delta)
+            new_roll = {"delta": round(delta, 2), "luck": round(frac, 6)}
         else:
             new_pts = evaluate(version, e.raw_payload or {})["points"]
-        if new_pts != e.raw_points or e.rule_version != version.version:
+
+        changed = False
+        if new_pts != e.raw_points:
             e.raw_points = new_pts
+            changed = True
+        if e.rule_version != version.version:
             e.rule_version = version.version
+            changed = True
+        if new_roll is not None and new_roll != (e.random_roll or {}):
+            e.random_roll = new_roll
+            changed = True
+        if changed:
             updated.append(e)
             d = first_day.get(e.pool_id)
             if d is None or e.event_date < d:
                 first_day[e.pool_id] = e.event_date
 
     if updated:
-        EventLog.objects.bulk_update(updated, ["raw_points", "rule_version"], batch_size=500)
+        EventLog.objects.bulk_update(
+            updated, ["raw_points", "rule_version", "random_roll"], batch_size=500)
     total_days = 0
     for pool in Pool.objects.filter(id__in=first_day):
         total_days += len(recompute_from(pool, first_day[pool.id], upto=upto))

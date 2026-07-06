@@ -58,10 +58,16 @@ def _num(context, params, default=0.0):
 # Évaluateurs — chacun renvoie (points: Decimal, roll: dict|None)
 # ─────────────────────────────────────────────────────────────
 def ev_fixed(params, ctx, rng):
-    """Points fixes, ou tirés dans [min,max] si la range est fournie (random figé)."""
+    """
+    Points fixes, ou tirés dans [min,max] si la range est fournie. On stocke la
+    « chance » sous forme de fraction [0,1] (`luck`) : elle permet de rééchelonner
+    la valeur sur une NOUVELLE range lors d'une édition, sans relancer les dés.
+    """
     if params.get("min") is not None and params.get("max") is not None:
-        v = rng.uniform(float(params["min"]), float(params["max"]))
-        return _d(v), {"rolled": round(v, 2)}
+        lo, hi = float(params["min"]), float(params["max"])
+        frac = rng.random()
+        v = lo + frac * (hi - lo)
+        return _d(v), {"rolled": round(v, 2), "luck": round(frac, 6)}
     return _d(params.get("points", 0)), None
 
 
@@ -88,10 +94,13 @@ def ev_linear_growth(params, ctx, rng):
 
 
 def ev_random_modifier(params, ctx, rng):
-    """base + modificateur aléatoire figé (ex: projets, BSQ)."""
+    """base + modificateur aléatoire figé (ex: projets, BSQ). `luck` = fraction
+    [0,1] du tirage → rééchelonnable si la range d'aléa est éditée."""
     base = float(params.get("base", 0))
-    delta = rng.uniform(float(params["rand_min"]), float(params["rand_max"]))
-    return _d(base + delta), {"delta": round(delta, 2)}
+    lo, hi = float(params["rand_min"]), float(params["rand_max"])
+    frac = rng.random()
+    delta = lo + frac * (hi - lo)
+    return _d(base + delta), {"delta": round(delta, 2), "luck": round(frac, 6)}
 
 
 def ev_threshold_window(params, ctx, rng):
