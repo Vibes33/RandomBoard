@@ -29,7 +29,7 @@ from .models import (
 )
 from .services import (
     adjust_user_score, day_multipliers, randomize_day_multipliers,
-    recompute_from, standings,
+    reapply_rule_points, recompute_from, standings,
 )
 
 
@@ -434,9 +434,11 @@ def api_points(request):
     rule.save(update_fields=["mult_min", "mult_max"])
 
     # 2) points de base : on écrit UNIQUEMENT les champs déclarés au schéma, dans
-    #    une nouvelle RuleVersion (le passé figé n'est pas touché).
+    #    une nouvelle RuleVersion, PUIS on réapplique aux events passés + on
+    #    recalcule le classement (le hasard déjà tiré est préservé).
     specs = {s["name"]: s for s in RULE_FIELDS.get(rule.key, [])}
     incoming = data.get("fields") or {}
+    recomputed = {"updated": 0, "days": 0}
     if incoming:
         cur = rule.current_version
         params = dict(cur.params) if cur else {}
@@ -454,7 +456,10 @@ def api_points(request):
         except (TypeError, ValueError):
             return HttpResponseBadRequest("Valeur de paramètre invalide.")
         new_rule_version(rule, params, user=request.user)
-    return JsonResponse({"ok": True})
+        pool = _pool()
+        if pool:
+            recomputed = reapply_rule_points(pool, rule)
+    return JsonResponse({"ok": True, **recomputed})
 
 
 # ─────────────────────── 4. Gestion par Jour ───────────────────────

@@ -583,9 +583,10 @@ async function savePoints(box,id){
       if(k)m[k]=parseFloat(row.querySelector('.mv').value)||0;
     }); fields[mf.dataset.map]=m;
   });
-  await api('/panel/api/points','POST',{id,mult_min:$('#mmin-'+id).value,mult_max:$('#mmax-'+id).value,fields});
+  const r=await api('/panel/api/points','POST',{id,mult_min:$('#mmin-'+id).value,mult_max:$('#mmax-'+id).value,fields});
   const ok=$('#ok-'+id);ok.classList.add('show');setTimeout(()=>ok.classList.remove('show'),1600);
-  toast('Règle enregistrée');
+  toast(r.updated?`Règle enregistrée · ${r.updated} points passés recalculés + classement mis à jour`:'Règle enregistrée');
+  if(inited.users)loadUsers();  // rafraîchit le classement si l'onglet Users a déjà été ouvert
 }
 
 /* ── 4. Gestion par Jour ── */

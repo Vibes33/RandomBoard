@@ -177,6 +177,52 @@ def recompute_from(pool, from_day, upto=None):
     return days
 
 
+def reapply_rule_points(pool, rule, upto=None):
+    """
+    Réapplique les paramètres ACTUELS d'une règle à TOUS ses events passés (non
+    annulés) de la piscine, puis recalcule snapshots + classement. Sert quand le
+    staff édite les points d'une règle : le passé ET le classement sont mis à
+    jour, plus seulement les futurs events.
+
+    Le hasard reste FIGÉ : on ne relance jamais les dés. Pour les règles
+    aléatoires on réutilise le tirage stocké (random_roll) —
+      - random_modifier : nouveau_base + delta figé ;
+      - fixed [min,max]  : on conserve la valeur tirée (la range n'affecte que
+        les futurs events).
+    Les règles déterministes (fixed points, tiers, map, seuils, facteurs…) sont
+    simplement ré-évaluées avec les nouveaux paramètres.
+    """
+    from .engine import _d, evaluate
+    version = rule.current_version
+    events = list(EventLog.objects.filter(pool=pool, rule=rule, is_voided=False))
+    if not version or not events:
+        return {"updated": 0, "days": 0}
+
+    params = version.params or {}
+    etype = params.get("type", "fixed")
+    is_rand_mod = etype == "random_modifier"
+    is_fixed_range = etype == "fixed" and params.get("min") is not None
+
+    updated = []
+    for e in events:
+        roll = e.random_roll or {}
+        if is_rand_mod and "delta" in roll:
+            new_pts = _d(float(params.get("base", 0)) + float(roll["delta"]))
+        elif is_fixed_range and "rolled" in roll:
+            new_pts = _d(roll["rolled"])          # tirage figé : range = futur only
+        else:
+            new_pts = evaluate(version, e.raw_payload or {})["points"]
+        if new_pts != e.raw_points or e.rule_version != version.version:
+            e.raw_points = new_pts
+            e.rule_version = version.version
+            updated.append(e)
+
+    if updated:
+        EventLog.objects.bulk_update(updated, ["raw_points", "rule_version"], batch_size=500)
+    days = recompute_from(pool, min(e.event_date for e in events), upto=upto)
+    return {"updated": len(updated), "days": len(days)}
+
+
 def backfill(pool):
     """Recalcule tous les snapshots depuis le 1er event jusqu'à hier."""
     first = (
