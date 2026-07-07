@@ -187,7 +187,7 @@ def plague_stats(pool):
         "healthy": max(0, total - infected),
         "pct": round(100 * infected / total) if total else 0,
         "peste": p, "cholera": c, "leader": leader,
-        "payout_day": str(pool.ends_on - timedelta(days=1)),
+        "payout_day": str(pool.ends_on),
         "recent": [{"login": i.user.login, "disease": i.disease,
                     "source": i.source.login if i.source else None,
                     "zero": i.is_patient_zero}
@@ -197,24 +197,36 @@ def plague_stats(pool):
 
 def plague_endgame(pool):
     """
-    Boost de fin, versé 1 JOUR AVANT l'exam final : la coalition la PLUS
-    NOMBREUSE fait gagner plague_payout points À CHACUN de ses membres.
-    Idempotent (ré-écrit les events) → rejouable après un changement de réglage.
+    Verdict de fin de piscine (versé le DERNIER jour, pool.ends_on) — JAMAIS de
+    manière journalière. La coalition la PLUS NOMBREUSE l'emporte ; règlement
+    ZÉRO-SOMME : chaque membre de la coalition PERDANTE perd `plague_payout`
+    points, et ce total est redistribué à parts égales à la coalition GAGNANTE.
+
+    → Non inflationniste (net nul), et forte variance pour la minorité malchanceuse
+      (gros malus individuel) : l'aléatoire de l'épidémie décide qui plonge.
+    Idempotent (void + ré-écriture + recompute) → rejouable après réglage.
     """
     from .services import recompute_from
-    peste = Infection.objects.filter(pool=pool, disease=Infection.Disease.PESTE).count()
-    cholera = Infection.objects.filter(pool=pool, disease=Infection.Disease.CHOLERA).count()
-    if peste == 0 and cholera == 0:
-        return {"ready": False}
+    P, C = Infection.Disease.PESTE, Infection.Disease.CHOLERA
+    peste = Infection.objects.filter(pool=pool, disease=P).count()
+    cholera = Infection.objects.filter(pool=pool, disease=C).count()
+    _void_all(pool, "plague_payout")  # nettoie tout verdict précédent (réglage/épidémie changés)
+    if peste == 0 or cholera == 0:
+        return {"ready": False}  # pas de duel s'il ne reste qu'une maladie (ou aucune)
     cfg = get_config(pool)
-    winner = Infection.Disease.PESTE if peste >= cholera else Infection.Disease.CHOLERA
-    payout_day = pool.ends_on - timedelta(days=1)
-    members = Infection.objects.filter(pool=pool, disease=winner).select_related("user")
-    # on nettoie tout ancien payout (l'autre coalition a pu passer devant / réglage changé)
-    _void_all(pool, "plague_payout")
-    for inf in members:
-        record_event(user=inf.user, pool=pool, rule_key="plague_payout",
-                     occurred_at=_noon(payout_day),
-                     context={"points": float(cfg.plague_payout)}, source=SYSTEM)
-    recompute_from(pool, payout_day)
-    return {"ready": True, "winner": winner, "paid": members.count(), "day": str(payout_day)}
+    winner, loser = (P, C) if peste >= cholera else (C, P)
+    pay = pool.ends_on
+    winners = list(Infection.objects.filter(pool=pool, disease=winner).select_related("user"))
+    losers = list(Infection.objects.filter(pool=pool, disease=loser).select_related("user"))
+    per_loser = float(cfg.plague_payout)
+    pot = per_loser * len(losers)
+    share = round(pot / len(winners), 2) if winners else 0.0
+    for inf in losers:  # la coalition perdante paie
+        record_event(user=inf.user, pool=pool, rule_key="plague_payout", occurred_at=_noon(pay),
+                     context={"points": -per_loser}, source=SYSTEM)
+    for inf in winners:  # redistribué aux gagnants (à parts égales)
+        record_event(user=inf.user, pool=pool, rule_key="plague_payout", occurred_at=_noon(pay),
+                     context={"points": share}, source=SYSTEM)
+    recompute_from(pool, pay)
+    return {"ready": True, "winner": winner, "winners": len(winners),
+            "losers": len(losers), "per_loser": per_loser, "share": share, "day": str(pay)}

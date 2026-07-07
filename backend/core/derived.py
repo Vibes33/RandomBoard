@@ -155,6 +155,51 @@ def apply_podium_tax(pool, day):
     return created
 
 
+def _exam_days(windows):
+    """Jours d'examen distincts (heure locale) à partir des fenêtres [(b,e), …]."""
+    return sorted({timezone.localdate(b) for b, e in (windows or [])})
+
+
+def apply_exam_regression(pool, day, exam_days):
+    """
+    Régression aux examens : à un jour d'EXAMEN, si le score (cumul du classement)
+    d'un étudiant est INFÉRIEUR à ce qu'il était au PRÉCÉDENT examen, il prend le
+    malus fixe `exam_regression`. Score = dernier cumul figé (snapshot) ≤ jour.
+
+    NB : à défaut de notes 42 d'examen (auto-notées, non exposées par l'API), on
+    compare le score du LEADERBOARD entre deux jalons d'examen. Idempotent
+    (void du jour + ré-écriture + recompute). No-op hors jour d'examen / 1er examen.
+    """
+    from .services import recompute_from
+    from .models import DailySnapshot
+    exam_days = sorted(set(exam_days))
+    if day not in exam_days:
+        return 0
+    prev = max((d for d in exam_days if d < day), default=None)
+    if prev is None:
+        return 0  # premier examen : aucune référence
+
+    def _scores(d):  # {user_id: dernier cumul figé ≤ d}
+        return dict(DailySnapshot.objects.filter(pool=pool, day__lte=d)
+                    .order_by("user_id", "-day").distinct("user_id")
+                    .values_list("user_id", "cumulative_total"))
+
+    now, before = _scores(day), _scores(prev)
+    EventLog.objects.filter(pool=pool, event_type="exam_regression",
+                            event_date=day, is_voided=False).update(is_voided=True)
+    users = {u.id: u for u in AppUser.objects.filter(pool=pool)}
+    n = 0
+    for uid, s_now in now.items():
+        s_prev = before.get(uid)
+        if s_prev is not None and s_now < s_prev and uid in users:
+            record_event(user=users[uid], pool=pool, rule_key="exam_regression",
+                         occurred_at=_noon(day), context={}, source=SYSTEM)
+            n += 1
+    if n:
+        recompute_from(pool, day)
+    return n
+
+
 def assign_designations(pool, n_cursed=1, n_blessed=1, when=None, seed=None):
     """[legacy] Désignait des Maudits / Bénis pour la SEMAINE (remplacé par le
     tirage quotidien assign_daily_designations)."""

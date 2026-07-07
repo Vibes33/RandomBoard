@@ -163,7 +163,8 @@ def run_full_sync(*, client, pool, campus, cursus, d_from=None, d_to=None,
                  + sync_evaluations(pool, p["evaluations"], users)
                  + sync_flags(pool, p["flags"], users)
                  + sync_host_effects(pool, d, p["locations"], p.get("pairs", []), users)
-                 + sync_exam_time(pool, d, p["locations"], exam_windows, users)
+                 # exam_time = malus basé sur le temps → jour final uniquement
+                 + (sync_exam_time(pool, d, p["locations"], exam_windows, users) if final else 0)
                  + sync_last_day(pool, d, p.get("pairs", []), users))
             from .chaos import spread_plague
             spread_plague(pool, p.get("pairs", []))  # propagation Peste & Choléra
@@ -172,13 +173,16 @@ def run_full_sync(*, client, pool, campus, cursus, d_from=None, d_to=None,
                 # aura, effets des élus (sur les gains du jour), taxe du podium,
                 # puis snapshot. UNIQUEMENT pour un jour terminé.
                 from .derived import (apply_aura_penalty, apply_designation_effects,
-                                      apply_podium_tax, assign_daily_designations)
+                                      apply_exam_regression, apply_podium_tax,
+                                      assign_daily_designations, _exam_days)
                 if not DailyDesignation.objects.filter(pool=pool, day=d).exists():
                     assign_daily_designations(pool, d)  # déterministe par (pool, jour)
                 apply_aura_penalty(pool, d)
                 apply_designation_effects(pool, d)
                 apply_podium_tax(pool, d)  # top 3 → bottom 10 (zéro-somme)
                 snapshot_day(pool, d)  # fige le jour
+                # régression aux examens (score < exam précédent) — après snapshot
+                apply_exam_regression(pool, d, _exam_days(exam_windows))
             else:
                 # Jour NON final : jamais de snapshot (le classement l'ajoute en
                 # live). On purge un éventuel snapshot périmé (ancien fetch qui
@@ -191,9 +195,9 @@ def run_full_sync(*, client, pool, campus, cursus, d_from=None, d_to=None,
         if cancelled:
             break
 
-    # Boost de fin Peste & Choléra (1 jour avant l'exam final) une fois le rejeu
-    # complet — la coalition la plus nombreuse remporte les points.
-    if not cancelled and d_to >= pool.ends_on - dt.timedelta(days=1):
+    # Verdict Peste & Choléra en fin de piscine (dernier jour) une fois le rejeu
+    # complet — règlement zéro-somme perdants → gagnants.
+    if not cancelled and d_to >= pool.ends_on:
         from .chaos import plague_endgame
         plague_endgame(pool)
 

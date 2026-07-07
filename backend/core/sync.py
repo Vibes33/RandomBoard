@@ -436,7 +436,9 @@ def sync_all(pool, data, *, score_cumulative=False):
         "evaluations": sync_evaluations(pool, data.get("evaluations", []), users),
         "flags": sync_flags(pool, data.get("flags", []), users),
         "hosts": sync_host_effects(pool, today, locations, pairs, users),
-        "exams": sync_exam_time(pool, today, locations, data.get("exam_windows", []), users),
+        # exam_time = malus basé sur le TEMPS → jour final uniquement (comme le logtime)
+        "exams": (sync_exam_time(pool, today, locations, data.get("exam_windows", []), users)
+                  if score_cumulative else 0),
         "last_day": sync_last_day(pool, today, pairs, users),
         "plague": spread_plague(pool, pairs),
     }

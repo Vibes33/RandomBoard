@@ -450,12 +450,14 @@ class PoolConfig(models.Model):
     # Peste & Choléra : boost versé 1 jour avant l'exam final à la coalition la
     # plus nombreuse — X points PAR PERSONNE (seul réglage).
     plague_seeded = models.BooleanField(default=False)
-    plague_payout = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal("400"))
+    # Zéro-somme : montant perdu par chaque membre de la coalition PERDANTE en fin
+    # de piscine, redistribué à parts égales aux gagnants (cf. chaos.plague_endgame).
+    plague_payout = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal("250"))
     # Easter egg « dedavid board » : probabilité [0,1] qu'un appel curl affiche
     # le Leaderboard Secret (tous les pseudos → dedavid). Réglable au panel.
     secret_board_chance = models.DecimalField(
-        max_digits=5, decimal_places=4, default=Decimal("0.01"),
-        help_text="Proba (0–1) du dedavid board à chaque curl. 0.01 = 1 %.",
+        max_digits=5, decimal_places=4, default=Decimal("0.003"),
+        help_text="Proba (0–1) du dedavid board à chaque curl. 0.003 = 0,3 %.",
     )
 
     def __str__(self):

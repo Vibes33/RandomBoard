@@ -114,7 +114,8 @@ def nightly_snapshot():
     import logging
 
     from .chaos import apply_stacking
-    from .derived import apply_designation_effects, apply_podium_tax
+    from .derived import (apply_designation_effects, apply_exam_regression,
+                          apply_podium_tax, _exam_days)
     from .sync import (_users, fetch_exam_windows, sync_evaluations, sync_exam_time,
                        sync_feedbacks, sync_flags, sync_host_effects, sync_last_day,
                        sync_locations)
@@ -124,6 +125,7 @@ def nightly_snapshot():
     client = FtClient()
     summary = {}
     for pool in Pool.objects.filter(is_active=True):
+        windows = []
         # 1) finalisation de la veille sur données complètes (logtime + discrets)
         if client.configured and pool.starts_on <= yesterday <= pool.ends_on:
             campus = pool.campus_id or settings.FT_CAMPUS_ID
@@ -151,6 +153,8 @@ def nightly_snapshot():
         apply_podium_tax(pool, yesterday)  # rubber-banding top 3 → bottom 10
         # 3) fige + verrouille
         count = snapshot_day(pool, yesterday)
+        # régression aux examens (score < exam précédent) — après le snapshot
+        apply_exam_regression(pool, yesterday, _exam_days(windows))
         DailyCoefficient.objects.filter(pool=pool, day=yesterday).update(locked=True)
         summary[pool.slug] = count
     return {"day": str(yesterday), "snapshots": summary}
@@ -185,8 +189,8 @@ def daily_derived():
                  "places": len(hosts["shiny"]) + len(hosts["cursed"]),
                  "designations": len(desig["cursed"]) + len(desig["blessed"]),
                  "auras": auras}
-        # boost Peste & Choléra : 1 jour avant l'exam final
-        if today == pool.ends_on - timedelta(days=1):
+        # Verdict Peste & Choléra : le DERNIER jour de la piscine uniquement
+        if today == pool.ends_on:
             entry["plague_endgame"] = plague_endgame(pool)
         out[pool.slug] = entry
     return out

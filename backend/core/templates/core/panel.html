@@ -334,7 +334,7 @@
     </div>
 
     <div class="bar" style="margin-top:18px">
-      <span class="sec" style="margin:0">Points par personne (coalition gagnante)</span>
+      <span class="sec" style="margin:0">Malus par perdant (zéro-somme, redistribué aux gagnants)</span>
       <input type="number" id="pl-points" style="width:110px">
       <button class="mini" id="pl-save">💾 Enregistrer</button>
       <span class="calc" id="pl-payday"></span>
@@ -795,7 +795,7 @@ async function loadPlague(){
   const grp=g=>`<div class="stat"><span>Infectés <b>${g.count}</b></span><span>Points <b>${money(g.points)}</b></span></div>
     <div class="calc">Patients zéro : ${esc(g.patient_zero.join(', ')||'—')}</div>`;
   $('#pl-peste').innerHTML=grp(stats.peste);$('#pl-cholera').innerHTML=grp(stats.cholera);
-  $('#pl-payday').textContent='Boost versé le '+stats.payout_day+' (1 j avant l\'exam final).';
+  $('#pl-payday').textContent='Verdict zéro-somme versé le '+stats.payout_day+' (dernier jour de la piscine).';
   if(points_per_person!=null && document.activeElement!==$('#pl-points'))$('#pl-points').value=points_per_person;
   if(secret_board_pct!=null && document.activeElement!==$('#pl-secret'))$('#pl-secret').value=secret_board_pct;
   $('#pl-recent').innerHTML=stats.recent.length?stats.recent.map(r=>`<div class="host">
