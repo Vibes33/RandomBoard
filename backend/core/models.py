@@ -53,6 +53,10 @@ class AppUser(models.Model):
         default=0,
         help_text="Décalage de rang manuel (ex: pénalité 'quoi sans feur' = perd 1 place).",
     )
+    is_banned = models.BooleanField(
+        default=False,
+        help_text="Banni : tout mouvement de points (gain OU perte) devient une PERTE.",
+    )
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
 

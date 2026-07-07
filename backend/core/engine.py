@@ -257,11 +257,18 @@ def record_event(*, user, pool, rule_key, occurred_at, context,
     rule, rv = _cached_rule(rule_key)
     result = evaluate(rv, context, rng=rng)
 
+    # Banni : peu importe gain ou perte, le mouvement devient une PERTE de la
+    # même amplitude (marqué dans le payload pour la traçabilité des logs).
+    points = result["points"]
+    if getattr(user, "is_banned", False) and points > 0:
+        points = -points
+        context = {**(context or {}), "banned": True}
+
     event = EventLog.objects.create(
         user=user, pool=pool, event_type=rule_key, source=source,
         occurred_at=occurred_at, event_date=timezone.localdate(occurred_at),
         rule=rule, rule_version=rv.version if rv else None,
-        raw_payload=context, raw_points=result["points"], random_roll=result["roll"],
+        raw_payload=context, raw_points=points, random_roll=result["roll"],
         dedup_key=dedup_key,
     )
     if result["rank_penalty"]:

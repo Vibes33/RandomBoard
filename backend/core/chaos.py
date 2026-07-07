@@ -211,6 +211,11 @@ def plague_endgame(pool):
     peste = Infection.objects.filter(pool=pool, disease=P).count()
     cholera = Infection.objects.filter(pool=pool, disease=C).count()
     _void_all(pool, "plague_payout")  # nettoie tout verdict précédent (réglage/épidémie changés)
+    # GARDE-FOU : le verdict ne tombe QUE le dernier jour (ou après, pour un
+    # rejeu de piscine finie). Un full-sync / réglage panel en COURS de piscine
+    # ne doit jamais l'émettre — l'épidémie n'est pas terminée.
+    if timezone.localdate() < pool.ends_on:
+        return {"ready": False, "too_early": True, "verdict_day": str(pool.ends_on)}
     if peste == 0 or cholera == 0:
         return {"ready": False}  # pas de duel s'il ne reste qu'une maladie (ou aucune)
     cfg = get_config(pool)

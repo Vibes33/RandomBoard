@@ -38,13 +38,51 @@ def day_multipliers(pool, day):
 def adjust_user_score(user, pool, points, reason="", staff=None):
     """Ajustement manuel de score par le staff → EventLog daté du jour (visible immédiatement)."""
     rule = Rule.objects.filter(key="manual_adjust").first()
+    pts = Decimal(str(points))
+    payload = {"reason": reason, "by": getattr(staff, "username", "")}
+    if user.is_banned and pts > 0:  # banni : tout gain devient une perte
+        pts = -pts
+        payload["banned"] = True
     return EventLog.objects.create(
         user=user, pool=pool, event_type="manual_adjust", source=EventLog.Source.MANUAL,
         occurred_at=timezone.now(), event_date=timezone.localdate(),
         rule=rule, rule_version=(rule.current_version.version if rule and rule.current_version else None),
-        raw_points=Decimal(str(points)),
-        raw_payload={"reason": reason, "by": getattr(staff, "username", "")},
+        raw_points=pts,
+        raw_payload=payload,
     )
+
+
+def set_user_banned(user, pool, banned):
+    """
+    Bascule le ban d'un étudiant, RÉTROACTIVEMENT :
+      - ban   : tous ses GAINS existants (raw_points > 0, non voidés) deviennent
+                négatifs, tagués `banned` dans le payload ;
+      - déban : tous les events tagués `banned` (flippés à l'écriture pendant le
+                ban, ou flippés ici au moment du ban) sont restaurés en positif.
+    Puis recompute des snapshots depuis le 1er jour touché. Idempotent : le tag
+    marque exactement ce qui a été flippé, on ne double-flippe jamais.
+    """
+    user.is_banned = banned
+    user.save(update_fields=["is_banned"])
+    if banned:
+        events = list(EventLog.objects.filter(user=user, pool=pool, is_voided=False,
+                                              raw_points__gt=0))
+        for e in events:
+            e.raw_points = -e.raw_points
+            e.raw_payload = {**(e.raw_payload or {}), "banned": True}
+    else:
+        events = [e for e in EventLog.objects.filter(user=user, pool=pool, is_voided=False,
+                                                     raw_points__lt=0)
+                  if (e.raw_payload or {}).get("banned")]
+        for e in events:
+            e.raw_points = -e.raw_points
+            payload = dict(e.raw_payload or {})
+            payload.pop("banned", None)
+            e.raw_payload = payload
+    if events:
+        EventLog.objects.bulk_update(events, ["raw_points", "raw_payload"], batch_size=500)
+        recompute_from(pool, min(e.event_date for e in events))
+    return len(events)
 
 
 def _draw_multiplier(rng, lo, hi):

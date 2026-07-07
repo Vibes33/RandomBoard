@@ -24,8 +24,8 @@ from .auth import staff_required
 from .derived import randomize_daily_hosts
 from .engine import new_rule_version
 from .models import (
-    AppUser, DailyDesignation, DailyEventMultiplier, DailyHost, EventLog,
-    Infection, Pool, Rule, SyncRun, Workstation,
+    AdminAuditLog, AppUser, DailyDesignation, DailyEventMultiplier, DailyHost,
+    EventLog, Infection, Pool, Rule, SyncRun, Workstation,
 )
 from .services import (
     adjust_user_score, day_multipliers, randomize_day_multipliers,
@@ -246,6 +246,7 @@ def api_users(request):
     for u in AppUser.objects.filter(pool=pool):
         b = board.get(u.login)
         users.append({"id": u.id, "login": u.login, "name": u.display_name,
+                      "banned": u.is_banned,
                       "total": round(b["total"]) if b else 0})
     users.sort(key=lambda x: x["total"], reverse=True)
     for i, u in enumerate(users, 1):
@@ -274,6 +275,27 @@ def api_user_adjust(request, user_id):
     board = {r["login"]: r for r in standings(pool, include_today=True)}
     b = board.get(user.login)
     return JsonResponse({"ok": True, "total": round(b["total"]) if b else 0})
+
+
+@staff_required
+@require_http_methods(["POST"])
+def api_user_ban(request, user_id):
+    """
+    Bannit / débannit un étudiant — RÉTROACTIF : au ban, tous ses gains passés
+    deviennent négatifs (et les suivants naissent négatifs) ; au déban, tout est
+    restauré. L'audit admin garde la trace du basculement.
+    """
+    pool = _pool()
+    user = AppUser.objects.filter(id=user_id, pool=pool).first()
+    if not user:
+        return HttpResponseBadRequest("Étudiant introuvable.")
+    from .services import set_user_banned
+    flipped = set_user_banned(user, pool, not user.is_banned)
+    AdminAuditLog.objects.create(
+        staff=request.user, action="ban" if user.is_banned else "unban",
+        target=user.login, after={"is_banned": user.is_banned, "events_flipped": flipped})
+    return JsonResponse({"ok": True, "login": user.login, "banned": user.is_banned,
+                         "flipped": flipped})
 
 
 def _log_detail(event, rule_label, mult, final):

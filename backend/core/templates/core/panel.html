@@ -482,15 +482,19 @@ function renderUsers(){
   const list=q?usersCache.filter(u=>
     (u.login||'').toLowerCase().includes(q)||(u.name||'').toLowerCase().includes(q)):usersCache;
   const tb=$('#users-tb');
-  tb.innerHTML=list.length?list.map(u=>`<tr class="urow" data-user="${u.id}">
-    <td class="rk">${u.rank}</td><td><b>${esc(u.login)}</b></td><td class="meta">${esc(u.name||'')}</td>
+  tb.innerHTML=list.length?list.map(u=>`<tr class="urow" data-user="${u.id}" ${u.banned?'style="opacity:.55"':''}>
+    <td class="rk">${u.rank}</td><td><b>${u.banned?'<s>':''}${esc(u.login)}${u.banned?'</s> 🚫':''}</b></td><td class="meta">${esc(u.name||'')}</td>
     <td class="num">${money(u.total)}</td>
     <td><input type="number" placeholder="± pts" style="width:74px" id="adj-${u.id}">
         <input placeholder="raison…" style="width:170px" id="rsn-${u.id}" maxlength="120">
-        <button class="mini" data-adj="${u.id}">OK</button></td></tr>`).join('')
+        <button class="mini" data-adj="${u.id}">OK</button>
+        <button class="mini ghost" data-ban="${u.id}" title="${u.banned?'Débannir':'Bannir : tout gain devient une perte'}">${u.banned?'♻️':'🚫'}</button></td></tr>`).join('')
     :`<tr><td colspan="5" class="empty">${q?'Aucun résultat.':'Aucun étudiant.'}</td></tr>`;
   $('#u-count').textContent=q?`${list.length} / ${usersCache.length}`:`${usersCache.length}`;
   tb.querySelectorAll('[data-adj]').forEach(b=>b.onclick=e=>{e.stopPropagation();adjust(b.dataset.adj);});
+  tb.querySelectorAll('[data-ban]').forEach(b=>b.onclick=async e=>{e.stopPropagation();
+    const r=await api('/panel/api/users/'+b.dataset.ban+'/ban','POST',{});
+    toast(r.banned?`${r.login} banni — ${r.flipped} gains passés en négatif`:`${r.login} débanni — ${r.flipped} events restaurés`);loadUsers();});
   tb.querySelectorAll('input[id^=adj-],input[id^=rsn-]').forEach(i=>i.onclick=e=>e.stopPropagation());
   tb.querySelectorAll('.urow').forEach(r=>r.onclick=()=>openProfile(r.dataset.user));
 }
