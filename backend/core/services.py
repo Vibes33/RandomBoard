@@ -237,6 +237,9 @@ def reapply_rule_points(rule, upto=None):
     events = list(EventLog.objects.filter(rule=rule, is_voided=False))
     if not version or not events:
         return {"updated": 0, "days": 0, "pools": 0}
+    # Bannis : leurs gains recalculés doivent RESTER des pertes (sinon chaque
+    # édition de règle « débannissait » silencieusement leurs events).
+    banned_ids = set(AppUser.objects.filter(is_banned=True).values_list("id", flat=True))
 
     params = version.params or {}
     etype = params.get("type", "fixed")
@@ -274,6 +277,11 @@ def reapply_rule_points(rule, upto=None):
             new_pts = evaluate(version, e.raw_payload or {})["points"]
 
         changed = False
+        if e.user_id in banned_ids and new_pts > 0:  # banni : le gain reste une perte
+            new_pts = -new_pts
+            if not (e.raw_payload or {}).get("banned"):
+                e.raw_payload = {**(e.raw_payload or {}), "banned": True}
+                changed = True
         if new_pts != e.raw_points:
             e.raw_points = new_pts
             changed = True
@@ -291,7 +299,8 @@ def reapply_rule_points(rule, upto=None):
 
     if updated:
         EventLog.objects.bulk_update(
-            updated, ["raw_points", "rule_version", "random_roll"], batch_size=500)
+            updated, ["raw_points", "rule_version", "random_roll", "raw_payload"],
+            batch_size=500)
     total_days = 0
     for pool in Pool.objects.filter(id__in=first_day):
         total_days += len(recompute_from(pool, first_day[pool.id], upto=upto))

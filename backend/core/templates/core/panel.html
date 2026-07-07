@@ -247,7 +247,7 @@
       <span class="sec" style="margin:0">Jour</span>
       <select id="day-pick"></select>
       <button class="mini" id="rand-all">🎲 Randomize ce jour</button>
-      <button class="mini" id="rand-alldays">🎲 Randomiser TOUS les jours</button>
+      <button class="mini" id="rand-alldays">🎲 TOUT re-tirer (multiplicateurs · places · élus)</button>
       <span class="calc">Un seul multiplicateur par event. Chaque modif recalcule les scores.</span>
     </div>
     <div class="bento" id="days-b"><div class="empty">Sélectionne un jour…</div></div>
@@ -258,6 +258,7 @@
       <span class="sec" style="margin:0">Jour</span>
       <select id="host-day"></select>
       <button class="mini" id="host-rand">🎲 Re-tirer les places du jour</button>
+      <button class="mini" id="host-rand-all">🎲 Randomiser TOUS les jours (places + élus)</button>
       <span class="calc" id="host-info"></span>
     </div>
     <div class="cols">
@@ -645,9 +646,9 @@ async function initDays(){
   $('#day-pick').onchange=loadDay;
   $('#rand-all').onclick=async()=>{await api('/panel/api/days','POST',{date:$('#day-pick').value,action:'randomize'});toast('Jour re-randomisé + scores recalculés');loadDay();};
   $('#rand-alldays').onclick=async()=>{
-    if(!confirm('Randomiser multiplicateurs + places pour TOUS les jours de la piscine ?'))return;
+    if(!confirm('Re-tirer multiplicateurs + places + élus (personnes bénites/maudites) pour TOUS les jours de la piscine ?'))return;
     const b=$('#rand-alldays'); b.disabled=true; const t=b.textContent; b.textContent='⏳ En cours…';
-    try{const r=await api('/panel/api/randomize-all','POST',{});toast(`${r.days} jours randomisés + scores recalculés`);loadDay();}
+    try{const r=await api('/panel/api/randomize-all','POST',{});toast(`${r.days} jours re-tirés (places + élus) + scores recalculés`);loadDay();}
     finally{b.disabled=false;b.textContent=t;}
   };
   if(d.days.length)loadDay();
@@ -683,6 +684,12 @@ async function initHosts(){
   if(d.days.length)$('#host-day').value=pickDefaultDay(d.days);
   $('#host-day').onchange=()=>loadHosts();
   $('#host-rand').onclick=async()=>{await api('/panel/api/hosts','POST',{date:$('#host-day').value});toast('Places re-tirées');loadHosts();};
+  $('#host-rand-all').onclick=async()=>{
+    if(!confirm('Re-tirer les places ET les élus (personnes bénites/maudites) pour TOUS les jours de la piscine ?'))return;
+    const b=$('#host-rand-all'); b.disabled=true; const t=b.textContent; b.textContent='⏳ En cours…';
+    try{const r=await api('/panel/api/randomize-all','POST',{});toast(`${r.days} jours re-tirés (multiplicateurs + places + élus) + scores recalculés`);loadHosts();}
+    finally{b.disabled=false;b.textContent=t;}
+  };
   loadHosts();
 }
 async function loadHosts(){

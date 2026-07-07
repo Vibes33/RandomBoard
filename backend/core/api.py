@@ -533,15 +533,27 @@ def api_days(request):
 @staff_required
 @require_http_methods(["POST"])
 def api_randomize_all(request):
-    """Randomise multiplicateurs + places Bénites/Maudites pour TOUS les jours de
-    la piscine active, puis recalcule les scores de bout en bout."""
+    """
+    Re-tire TOUT, pour TOUS les jours de la piscine active :
+      - multiplicateurs par event,
+      - places Bénites/Maudites (hosts),
+      - élus du jour (personnes Bénites/Maudites — DailyDesignation).
+    Les jours déjà clôturés voient leurs effets d'élus ré-appliqués (± % des
+    gains, déterministe depuis la base) pour coller au nouveau tirage, puis tout
+    le classement est recalculé. Garantit qu'AUCUNE date ne reste vide.
+    """
+    from .derived import apply_designation_effects, assign_daily_designations
     pool = _pool()
     if not pool:
         return HttpResponseBadRequest("Aucune piscine active.")
+    today = timezone.localdate()
     day, days = pool.starts_on, 0
     while day <= pool.ends_on:
         randomize_day_multipliers(pool, day, reseed=True)
         randomize_daily_hosts(pool, day, reseed=True)
+        assign_daily_designations(pool, day, reseed=True)  # personnes bénites/maudites
+        if day < today:  # jour clôturé : les effets des élus suivent le nouveau tirage
+            apply_designation_effects(pool, day)
         day += timedelta(days=1)
         days += 1
     recompute_from(pool, pool.starts_on)
