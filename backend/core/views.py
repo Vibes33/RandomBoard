@@ -7,7 +7,7 @@ Vues HTTP du Chaos Leaderboard 42.
 import random
 
 from django.http import HttpResponse, JsonResponse
-from django.shortcuts import redirect
+from django.shortcuts import render
 from django.utils import timezone
 
 from .models import CurlTracking, Pool
@@ -27,13 +27,14 @@ def root(request, login=None):
     """
     `curl monsite.com` → rendu texte ANSI du leaderboard, directement.
     `curl monsite.com/aandreo` → même leaderboard, pseudo `aandreo` en surbrillance.
-    Navigateur (User-Agent Mozilla/…) → site web classique. Un User-Agent vide
-    est traité comme un client CLI (curl -A "" et consorts).
+    Navigateur (User-Agent Mozilla/…) → page HTML du leaderboard (même contenu).
+    Le panel admin n'est PAS servi ici : accès explicite via /panel uniquement.
+    Un User-Agent vide est traité comme un client CLI (curl -A "" et consorts).
     """
     ua = request.META.get("HTTP_USER_AGENT", "").lower()
     if not ua or any(tok in ua for tok in _CLI_AGENTS):
         return leaderboard_preview(request, me=login)
-    return redirect("/panel/")
+    return leaderboard_html(request, me=login)
 
 
 def _client_ip(request):
@@ -192,7 +193,7 @@ def _render_board(pool, board, colored=True, links=True, me=None, secret_chance=
 
     lines.append(divider())
     # Astuce discrète : surligner son propre login (masquée si déjà utilisé).
-    hint = "" if me else f"   {p['dim']}(?me=login : surligne ton pseudo){p['reset']}"
+    hint = "" if me else f"   {p['dim']}{p['reset']}"
     lines += [
         f"{indent}{p['muted']}crafted by {p['lav']}{p['bold']}Dedavid{p['reset']}"
         f"{p['muted']} & {p['lav']}{p['bold']}Rydelepi{p['reset']}{hint}",
@@ -224,3 +225,32 @@ def leaderboard_preview(request, me=None):
     body = _render_board(pool, board, colored=colored, links=links, me=me,
                          secret_chance=chance)
     return HttpResponse(body, content_type="text/plain; charset=utf-8")
+
+
+def leaderboard_html(request, me=None):
+    """
+    Version NAVIGATEUR du leaderboard (même contenu que le curl : classement
+    complet, top 3 colorés, surbrillance /login ou ?me=, easter egg dedavid).
+    Servie à la racine — le panel admin reste accessible uniquement via /panel.
+    """
+    CurlTracking.objects.create(
+        ip=_client_ip(request), endpoint=request.path or "/",
+        user_agent=request.META.get("HTTP_USER_AGENT", "")[:255],
+        day=timezone.localdate(),
+    )
+    pool = Pool.objects.filter(is_active=True).order_by("-starts_on").first()
+    if not pool:
+        return HttpResponse("Aucune Piscine active.\n", content_type="text/plain")
+
+    board = standings(pool, include_today=True)
+    me = (me or request.GET.get("me") or "").lower() or None
+    from .chaos import get_config
+    secret = random.random() < float(get_config(pool).secret_board_chance)
+    rows = [{**r, "display": _SECRET_LOGIN if secret else r["login"],
+             "hl": bool(me and not secret and r["login"].lower() == me)}
+            for r in board]
+    my_row = None if secret else next(
+        (r for r in board if r["login"].lower() == me), None) if me else None
+    return render(request, "core/leaderboard.html", {
+        "pool": pool, "rows": rows, "secret": secret, "me": me, "my_row": my_row,
+    })

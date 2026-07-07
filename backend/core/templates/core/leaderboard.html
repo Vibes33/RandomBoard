@@ -1,0 +1,62 @@
+{# Leaderboard public (navigateur). Même esprit que le rendu curl : grille #}
+{# compacte, top 3 doré/argent/bronze, pseudos cliquables vers l'intra, #}
+{# surbrillance ?me=/login, et l'easter egg « dedavid board » (palette #}
+{# émeraude/océan). Le panel admin reste accessible UNIQUEMENT via /panel. #}
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% if secret %}✦ dedavid board ✦{% else %}✦ 42 — Leaderboard ✦{% endif %}</title>
+<style>
+  :root{
+    --bg:#14121f; --card:#1c1930; --line:#2c2847; --txt:#e8e4f5; --muted:#8b84ad;
+    --gold:#f0d08a; --silver:#d5d3e0; --bronze:#c9a081; --green:#a8d8a0; --red:#e89aa4;
+    --accent:#9a8fd0;
+    {% if secret %}--txt:#7fe0b0; --muted:#2e9db8; --gold:#7fe0b0; --silver:#7fe0b0;
+    --bronze:#7fe0b0; --green:#2e9db8; --red:#2e9db8; --accent:#2e9db8;{% endif %}
+  }
+  *{box-sizing:border-box;margin:0}
+  body{background:var(--bg);color:var(--txt);font:14px/1.5 "SF Mono",Menlo,Consolas,monospace;
+       padding:32px 16px;display:flex;flex-direction:column;align-items:center}
+  h1{font-size:20px;letter-spacing:.5px}
+  .sub{color:var(--muted);margin:4px 0 20px;font-size:12px}
+  .me{margin:0 0 14px;color:var(--gold);font-weight:700}
+  .me.nf{color:var(--muted);font-weight:400}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,max-content));
+        gap:4px 28px;max-width:1200px}
+  .row{display:flex;gap:10px;align-items:baseline;padding:2px 8px;border-radius:6px;white-space:nowrap}
+  .rk{color:var(--muted);min-width:3ch;text-align:right}
+  .r1 .rk{color:var(--gold)} .r2 .rk{color:var(--silver)} .r3 .rk{color:var(--bronze)}
+  .lg{min-width:9ch} .lg a{color:var(--txt);text-decoration:none}
+  .lg a:hover{color:var(--accent);text-decoration:underline}
+  .pt{margin-left:auto;min-width:6ch;text-align:right}
+  .pos{color:var(--green)} .neg{color:var(--red)}
+  .hl{background:var(--accent);color:var(--bg);font-weight:700}
+  .hl .rk,.hl .pt,.hl .lg a{color:var(--bg)}
+  .foot{margin-top:22px;color:var(--muted);font-size:12px}
+  .foot b{color:var(--accent)}
+  .empty{color:var(--muted);padding:40px 0}
+</style>
+</head>
+<body>
+  <h1>{% if secret %}✦ dedavid board ✦{% else %}✦ 42 — Leaderboard ✦{% endif %}</h1>
+  <div class="sub">{{ pool.name }} · {{ pool.starts_on|date:"d/m" }} → {{ pool.ends_on|date:"d/m/Y" }} · {{ rows|length }} participants</div>
+  {% if me %}
+    {% if my_row %}<div class="me">➤ toi : #{{ my_row.rank }} · {{ my_row.total|floatformat:0 }} pts</div>
+    {% else %}<div class="me nf">(« {{ me }} » introuvable au classement)</div>{% endif %}
+  {% endif %}
+  {% if rows %}
+  <div class="grid">
+    {% for r in rows %}
+    <div class="row r{{ r.rank }}{% if r.hl %} hl{% endif %}">
+      <span class="rk">{{ r.rank }}</span>
+      <span class="lg"><a href="https://profile.intra.42.fr/users/{{ r.display }}" target="_blank" rel="noopener">{{ r.display }}</a></span>
+      <span class="pt {% if r.total >= 0 %}pos{% else %}neg{% endif %}">{{ r.total|floatformat:0 }}</span>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}<div class="empty">(le grimoire est encore vierge…)</div>{% endif %}
+  <div class="foot">crafted by <b>Dedavid</b> &amp; <b>Rydelepi</b> · astuce : <code>/tonlogin</code> te surligne · version terminal : <code>curl {{ request.get_host }}</code></div>
+</body>
+</html>
