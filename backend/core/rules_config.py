@@ -35,7 +35,7 @@ RULES = [
       "in_points": 0, "out_points": -80}),
     ("exam_time", "loss", "Temps passé en examen (+ de temps = malus)",
      {"type": "linear_growth", "value_key": "minutes", "min": 0, "max": 240,
-      "max_malus": -300}),
+      "max_malus": -150}),
     ("exam_regression", "loss", "Score en baisse depuis l'exam précédent (malus)",
      {"type": "fixed", "points": -150}),
     # Élus du jour (DailyDesignation) : ±pct % des gains du jour, appliqué à la
@@ -53,7 +53,7 @@ RULES = [
     ("logtime_high", "loss", "Logtime > 14h (malus fixe du jour)",
      {"type": "fixed", "points": -50}),
     ("aura_first_coalition", "loss", "1er de sa coalition (perte d'aura)",
-     {"type": "fixed", "min": -1200, "max": -800}),
+     {"type": "fixed", "min": -300, "max": -150}),
     ("last_day_corrections", "event", "Dernier jour : points par correction donnée",
      {"type": "multiplier", "value_key": "correction_points", "factor": 100}),
     # ─── règles avancées (contextuelles) ───
@@ -93,12 +93,12 @@ RULES = [
       "map": {"Empty work": -100, "Crash": -80, "Norme": -60,
               "Can't explain": -80, "Cheat": -200}}),
     ("project_random", "event", "Projet évalué (points random ±, au pif)",
-     {"type": "random_modifier", "base": 0, "rand_min": -100, "rand_max": 120}),
+     {"type": "random_modifier", "base": 0, "rand_min": -80, "rand_max": 140}),
     # ─── nouvelles règles (étape 4.1) ───
     ("assiduity_streak", "gain", "Assiduité : jours consécutifs (week-ends neutres, capé à 7 j)",
      {"type": "multiplier", "value_key": "streak", "factor": 5, "cap": 7}),
     ("project_perfect", "loss", "Rendre un projet pile à 100 (malus)",
-     {"type": "fixed", "points": -30}),
+     {"type": "fixed", "points": -10}),
     ("cluster_bonus", "event", "Bonus/malus selon le cluster où l'élève est assis",
      {"type": "map_lookup", "key_field": "cluster", "default": 0,
       "map": {"c1": 15, "c2": 0, "c3": -10}}),
