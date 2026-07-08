@@ -36,6 +36,8 @@
   .hl .rk,.hl .pt,.hl .lg a{color:var(--bg)}
   .foot{margin-top:22px;color:var(--muted);font-size:12px}
   .foot b{color:var(--accent)}
+  .tips{margin-top:10px;display:flex;flex-direction:column;gap:4px;align-items:center;
+        color:var(--gold);font-size:12px}
   .empty{color:var(--muted);padding:40px 0}
 </style>
 </head>
@@ -58,5 +60,6 @@
   </div>
   {% else %}<div class="empty">(le grimoire est encore vierge…)</div>{% endif %}
   <div class="foot">crafted by <b>Dedavid</b> &amp; <b>Rydelepi</b> · astuce : <code>/tonlogin</code> te surligne · version terminal : <code>curl {{ request.get_host }}</code></div>
+  {% if tips %}<div class="tips">{% for tip in tips %}<div>💡 {{ tip }}</div>{% endfor %}</div>{% endif %}
 </body>
 </html>

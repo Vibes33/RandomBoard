@@ -49,6 +49,15 @@ def _dec(value):
     return Decimal(str(value))
 
 
+def _local(dt, fmt="%d/%m %H:%M"):
+    """
+    Formate un datetime AWARE en heure LOCALE (Europe/Paris, CEST = UTC+2 l'été).
+    Sans ça, .strftime() sur l'aware UTC stocké en base afficherait l'heure UTC
+    (2h de retard). Renvoie None si dt est None.
+    """
+    return timezone.localtime(dt).strftime(fmt) if dt else None
+
+
 def _rule_cards(pool=None):
     """
     Sérialise les règles ACTIVES pour les onglets Points/Jour : pour chaque règle,
@@ -546,7 +555,7 @@ def api_user_logs(request, user_id):
         if worst is None or final < worst["final"]:
             worst = {"label": label, "final": final}
         logs.append({
-            "id": e.id, "at": e.occurred_at.strftime("%d/%m %H:%M"),
+            "id": e.id, "at": _local(e.occurred_at),
             "day": e.event_date.strftime("%d/%m"),
             "event": label, "key": e.event_type, "category": category, "source": e.source,
             "raw": round(raw, 2), "mult": float(mult), "final": final,
@@ -581,7 +590,7 @@ def api_logs(request):
     if request.GET.get("event"):
         qs = qs.filter(event_type=request.GET["event"])
     logs = [{
-        "at": e.occurred_at.strftime("%d/%m %H:%M"), "login": e.user.login,
+        "at": _local(e.occurred_at), "login": e.user.login,
         "event": e.event_type, "source": e.source,
         "points": float(e.raw_points), "day": e.event_date.strftime("%d/%m"),
         # raison d'un ajustement manuel (+ auteur) → visible dans l'onglet Logs
@@ -774,8 +783,8 @@ def _run_payload(run):
         "days_done": run.days_done, "days_total": run.days_total,
         "current_day": str(run.current_day) if run.current_day else None,
         "events": run.events_ingested, "log": run.log, "error": run.error,
-        "started_at": run.started_at.strftime("%d/%m %H:%M:%S") if run.started_at else None,
-        "finished_at": run.finished_at.strftime("%d/%m %H:%M:%S") if run.finished_at else None,
+        "started_at": _local(run.started_at, "%d/%m %H:%M:%S"),
+        "finished_at": _local(run.finished_at, "%d/%m %H:%M:%S"),
     }
 
 
@@ -790,7 +799,7 @@ def api_sync(request):
             "history": [{
                 "id": r.id, "status": r.status, "pool": r.pool.name if r.pool else None,
                 "events": r.events_ingested, "progress": r.progress,
-                "at": r.created_at.strftime("%d/%m %H:%M"),
+                "at": _local(r.created_at),
             } for r in runs],
             "running": SyncRun.objects.filter(
                 status__in=[SyncRun.Status.PENDING, SyncRun.Status.RUNNING]).exists(),

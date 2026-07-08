@@ -65,6 +65,48 @@ _PER_COL = 20
 _MAX_COLS = 5
 _TARGET_WIDTH = 80
 
+# Tips « toujours utiles » (piochés en plus d'un éventuel tip contextuel).
+_GENERAL_TIPS = [
+    "Corrigez un max : chaque correction propage la Peste & le Choléra.",
+    "Logtime raisonnable > logtime de 24h — au-delà de 14h, c'est malus.",
+    "Un feedback sympa rapporte des points (« quoi » sans « feur » = malus).",
+    "Fuyez les places maudites, ruez-vous sur les places bénites.",
+    "Restez discret : se faire scripter, ça pique au classement.",
+    "Le jackpot de la minute existe… tentez le logtime pile à 1 min.",
+]
+
+
+def _pool_tips(pool, today, n=2):
+    """
+    Tips CONTEXTUELS selon le moment de la piscine (jour de semaine, début/fin,
+    proximité du week-end/exam) + quelques généraux. Renvoie `n` tips distincts,
+    en priorisant les contextuels. Choix aléatoire → varie à chaque curl.
+    """
+    wd = today.weekday()  # 0=lun … 4=ven, 5=sam, 6=dim
+    day_num = (today - pool.starts_on).days + 1
+    days_left = (pool.ends_on - today).days
+    ctx = []
+    if wd in (3, 4):  # jeudi / vendredi : le rush du week-end arrive
+        ctx.append("Le rush du week-end approche — formez vos équipes dès maintenant !")
+    if wd == 4:  # vendredi : jour d'exam en piscine
+        ctx.append("N'oubliez pas de vous register à l'examen !")
+    if wd in (5, 6):  # week-end : rush en cours
+        ctx.append("C'est le rush ! Codez en groupe et soignez vos rendus.")
+    if day_num <= 3:
+        ctx.append("Début de piscine : soignez vos shells et prenez le rythme.")
+    if 0 <= days_left <= 2:
+        ctx.append("Dernière ligne droite — l'examen final décide de tout.")
+    # les contextuels sont prioritaires (pondérés ×2) puis on complète au général
+    pool_tips = ctx * 2 + _GENERAL_TIPS
+    picks, seen = [], set()
+    while pool_tips and len(picks) < n:
+        t = random.choice(pool_tips)
+        if t not in seen:
+            picks.append(t)
+            seen.add(t)
+        pool_tips = [x for x in pool_tips if x != t] if t in seen else pool_tips
+    return picks
+
 
 def _hyperlink(url, text, enabled=True):
     """
@@ -202,13 +244,13 @@ def _render_board(pool, board, colored=True, links=True, me=None, secret_chance=
             lines.append(indent + sep.join(parts).rstrip())
 
     lines.append(divider())
-    # Astuce discrète : surligner son propre login (masquée si déjà utilisé).
-    hint = "" if me else f"   {p['dim']}{p['reset']}"
-    lines += [
+    lines.append(
         f"{indent}{p['muted']}crafted by {p['lav']}{p['bold']}Dedavid{p['reset']}"
-        f"{p['muted']} & {p['lav']}{p['bold']}Rydelepi{p['reset']}{hint}",
-        "",
-    ]
+        f"{p['muted']} & {p['lav']}{p['bold']}Rydelepi{p['reset']}")
+    # Tips contextuels de la piscine, juste sous les créateurs.
+    for tip in _pool_tips(pool, timezone.localdate()):
+        lines.append(f"{indent}{p['gold']}💡 {p['muted']}{tip}{p['reset']}")
+    lines.append("")
     return "\n".join(lines) + "\n"
 
 
@@ -267,4 +309,5 @@ def leaderboard_html(request, me=None):
         (r for r in board if r["login"].lower() == me), None) if me else None
     return render(request, "core/leaderboard.html", {
         "pool": pool, "rows": rows, "secret": secret, "me": me, "my_row": my_row,
+        "tips": _pool_tips(pool, timezone.localdate()),
     })

@@ -418,25 +418,36 @@ def sync_last_day(pool, day, pairs, users=None):
     return created
 
 
-def fetch_trolls():
+def fetch_trolls(diagnostic=None):
     """
     Récupère le journal des trolls depuis le Google Sheet (Apps Script).
     URL + mot de passe vivent dans .env (settings) — jamais dans le code.
     Renvoie des dicts normalisés : {at, troll, author, victim, level,
     destructive, permanent}. Liste vide si non configuré ou si l'endpoint échoue.
+
+    `diagnostic` (dict optionnel) : on y écrit l'état pour le débogage prod
+    (configured, http_status, rows, error) — cf. management command ft_trolls.
     """
     import requests
     from django.conf import settings as dj_settings
+    diag = diagnostic if diagnostic is not None else {}
     url = dj_settings.TROLL_SHEET_URL
     pwd = dj_settings.TROLL_SHEET_PASSWORD
+    diag["configured"] = bool(url and pwd)
     if not url or not pwd:
+        # Cause n°1 en prod : le .env de prod n'a pas TROLL_SHEET_URL/PASSWORD
+        # (le .env est gitignoré → il faut les ajouter côté serveur + recreate).
+        log.warning("fetch_trolls: TROLL_SHEET_URL/PASSWORD absent du .env — aucun troll fetché")
+        diag["error"] = "TROLL_SHEET_URL/PASSWORD non configuré (.env)"
         return []
     try:
         resp = requests.get(url, params={"password": pwd}, timeout=20)
+        diag["http_status"] = resp.status_code
         resp.raise_for_status()
         rows = resp.json()
     except Exception as ex:  # noqa: BLE001 — sheet KO ⇒ on n'ingère rien
-        log.warning("fetch_trolls: %s", ex)
+        log.warning("fetch_trolls: échec HTTP/réseau vers le Google Sheet: %s", ex)
+        diag["error"] = str(ex)
         return []
     out = []
     for row in rows[1:]:  # ligne 0 = en-têtes ; colonnes >7 = stats annexes, ignorées
@@ -449,6 +460,7 @@ def fetch_trolls():
                         "destructive": bool(row[5]), "permanent": bool(row[6])})
         except (ValueError, TypeError, IndexError):
             continue
+    diag["rows"] = len(out)
     return out
 
 
