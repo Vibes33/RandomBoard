@@ -222,6 +222,169 @@ def api_pool_fetch(request, pool_id):
     return JsonResponse({"ok": True, "id": run.id, "pool": pool.name})
 
 
+# ─────────────────────────── 0bis. Données (gestion centralisée) ───────────────────────────
+@staff_required
+def api_data_overview(request):
+    """Vue d'ensemble de TOUTES les piscines pour l'onglet Données : stats
+    détaillées par piscine + totaux + état d'une éventuelle synchro en cours."""
+    from .models import DailySnapshot, Infection
+    ev = {r["pool"]: r["n"] for r in EventLog.objects.filter(is_voided=False)
+          .values("pool").annotate(n=Count("id"))}
+    snap = {r["pool"]: r["n"] for r in DailySnapshot.objects.values("pool").annotate(n=Count("id"))}
+    inf = {r["pool"]: r["n"] for r in Infection.objects.values("pool").annotate(n=Count("id"))}
+    pools = []
+    for p in Pool.objects.annotate(n_users=Count("users", distinct=True)).order_by("-starts_on"):
+        pools.append({
+            "id": p.id, "name": p.name, "slug": p.slug,
+            "starts_on": str(p.starts_on), "ends_on": str(p.ends_on),
+            "campus": p.campus_id, "cursus": p.cursus_id, "is_active": p.is_active,
+            "users": p.n_users, "events": ev.get(p.id, 0),
+            "snapshots": snap.get(p.id, 0), "infections": inf.get(p.id, 0),
+        })
+    running = SyncRun.objects.filter(
+        status__in=[SyncRun.Status.PENDING, SyncRun.Status.RUNNING]).exists()
+    return JsonResponse({
+        "pools": pools, "sync_running": running,
+        "totals": {"pools": len(pools), "users": AppUser.objects.count(),
+                   "events": EventLog.objects.filter(is_voided=False).count(),
+                   "active": next((p["name"] for p in pools if p["is_active"]), None)},
+    })
+
+
+@staff_required
+@require_http_methods(["POST"])
+def api_pool_reset(request, pool_id):
+    """Vide les données de JEU d'une piscine (events, snapshots, tirages, épidémie…)
+    — roster et config conservés (sauf ?users=1). Fonctionne pour toute piscine."""
+    from .services import reset_pool_data
+    pool = Pool.objects.filter(id=pool_id).first()
+    if not pool:
+        return HttpResponseBadRequest("Piscine introuvable.")
+    wipe_users = bool(_json(request).get("wipe_users"))
+    counts = reset_pool_data(pool, wipe_users=wipe_users)
+    AdminAuditLog.objects.create(staff=request.user, action="reset_pool",
+                                 target=pool.name, after=counts)
+    return JsonResponse({"ok": True, "pool": pool.name, "deleted": counts})
+
+
+@staff_required
+@require_http_methods(["POST"])
+def api_data_reset_all(request):
+    """Reset de TOUTES les piscines d'un coup (y compris celles créées à la main).
+    Vide les données de jeu de chacune ; roster/config conservés (sauf ?users=1)."""
+    from .services import reset_pool_data
+    wipe_users = bool(_json(request).get("wipe_users"))
+    out = {}
+    for pool in Pool.objects.all():
+        out[pool.slug] = reset_pool_data(pool, wipe_users=wipe_users)
+    AdminAuditLog.objects.create(staff=request.user, action="reset_all_pools",
+                                 target=f"{len(out)} piscines",
+                                 after={"wipe_users": wipe_users})
+    return JsonResponse({"ok": True, "pools": len(out), "wipe_users": wipe_users})
+
+
+@staff_required
+def api_pool_data_types(request, pool_id):
+    """Compteurs par TYPE de données d'une piscine (pour la gestion granulaire)."""
+    from .services import data_type_stats
+    pool = Pool.objects.filter(id=pool_id).first()
+    if not pool:
+        return HttpResponseBadRequest("Piscine introuvable.")
+    running = SyncRun.objects.filter(
+        status__in=[SyncRun.Status.PENDING, SyncRun.Status.RUNNING]).exists()
+    return JsonResponse({
+        "pool": {"id": pool.id, "name": pool.name,
+                 "starts_on": str(pool.starts_on), "ends_on": str(pool.ends_on),
+                 "campus": pool.campus_id, "cursus": pool.cursus_id},
+        "types": data_type_stats(pool), "sync_running": running,
+    })
+
+
+@staff_required
+@require_http_methods(["POST"])
+def api_pool_type_reset(request, pool_id, type_key):
+    """Reset d'UN type de données d'une piscine (delete events + annexes + recompute)."""
+    from .services import reset_data_type
+    pool = Pool.objects.filter(id=pool_id).first()
+    if not pool:
+        return HttpResponseBadRequest("Piscine introuvable.")
+    try:
+        counts = reset_data_type(pool, type_key)
+    except ValueError as ex:
+        return HttpResponseBadRequest(str(ex))
+    AdminAuditLog.objects.create(staff=request.user, action=f"reset_type:{type_key}",
+                                 target=pool.name, after=counts)
+    return JsonResponse({"ok": True, "type": type_key, "deleted": counts})
+
+
+@staff_required
+@require_http_methods(["POST"])
+def api_pool_type_refetch(request, pool_id, type_key):
+    """
+    Refetch / resync d'UN type de données :
+      - api    : reset (sauf users) puis synchro SCOPÉE (SyncRun async) ;
+      - sheet  : reset puis ré-ingestion du Google Sheet (synchrone) ;
+      - random : re-tirage local sur tous les jours (synchrone).
+    """
+    from . import data_types
+    from .services import reset_data_type
+    pool = Pool.objects.filter(id=pool_id).first()
+    if not pool:
+        return HttpResponseBadRequest("Piscine introuvable.")
+    t = data_types.BY_KEY.get(type_key)
+    if not t:
+        return HttpResponseBadRequest("Type de données inconnu.")
+
+    if t["source"] == "api":
+        if SyncRun.objects.filter(
+                status__in=[SyncRun.Status.PENDING, SyncRun.Status.RUNNING]).exists():
+            return HttpResponseBadRequest("Une synchronisation est déjà en cours.")
+        if not (pool.campus_id or settings.FT_CAMPUS_ID):
+            return HttpResponseBadRequest("Campus ID manquant sur la piscine.")
+        if type_key != "users":  # users : on ne reset pas (cascade = perte des events)
+            reset_data_type(pool, type_key)
+        run = SyncRun.objects.create(
+            pool=pool, date_from=pool.starts_on, date_to=pool.ends_on,
+            scope=",".join(t["scope"]),
+            created_by=request.user if request.user.is_authenticated else None)
+        from .tasks import run_sync
+        run_sync.delay(run.id)
+        return JsonResponse({"ok": True, "mode": "sync", "id": run.id, "type": type_key})
+
+    if t["source"] == "sheet":  # trolls
+        from .sync import fetch_trolls, sync_trolls
+        from .services import recompute_from
+        reset_data_type(pool, type_key)
+        n, first = sync_trolls(pool, fetch_trolls())
+        if first:
+            recompute_from(pool, first)
+        return JsonResponse({"ok": True, "mode": "sheet", "type": type_key, "created": n})
+
+    # random : re-tirage local sur tous les jours + recompute
+    from datetime import timedelta as _td
+
+    from .derived import (apply_designation_effects, assign_daily_designations,
+                          randomize_daily_hosts)
+    from .services import backfill, randomize_day_multipliers
+    reset_data_type(pool, type_key)
+    today = timezone.localdate()
+    day = pool.starts_on
+    while day <= pool.ends_on:
+        if type_key == "places":
+            randomize_daily_hosts(pool, day, reseed=True)
+        elif type_key == "designations":
+            assign_daily_designations(pool, day, reseed=True)
+            if day < today:
+                apply_designation_effects(pool, day)
+        elif type_key == "multipliers":
+            randomize_day_multipliers(pool, day, reseed=True)
+        day += _td(days=1)
+    backfill(pool)
+    AdminAuditLog.objects.create(staff=request.user, action=f"retire_type:{type_key}",
+                                 target=pool.name)
+    return JsonResponse({"ok": True, "mode": "random", "type": type_key})
+
+
 @staff_required
 @require_http_methods(["POST"])
 def api_pool_activate(request, pool_id):

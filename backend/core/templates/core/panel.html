@@ -170,6 +170,7 @@
     <div class="tab" data-tab="hosts">🖥 Places &amp; Hosts</div>
     <div class="tab" data-tab="sync">🔄 Synchronisation</div>
     <div class="tab" data-tab="plague">🦠 Peste &amp; Choléra</div>
+    <div class="tab" data-tab="data">📦 Données</div>
   </div>
 
   <section class="pane on" id="p-pools">
@@ -352,6 +353,25 @@
     <div class="card" id="pl-recent"><div class="spin">Chargement…</div></div>
   </section>
 
+  <section class="pane" id="p-data">
+    <div class="sec">Gestion des données par TYPE — reset / refetch chaque type indépendamment</div>
+    <div class="bar">
+      <span class="sec" style="margin:0">Piscine</span>
+      <select id="dt-pool"></select>
+      <span class="calc" id="dt-info"></span>
+      <div class="grow"></div>
+      <button class="mini ghost" id="dt-refresh">🔄 Rafraîchir</button>
+      <button class="mini danger" id="dt-reset-all">🧨 Reset piscine entière</button>
+    </div>
+    <div class="calc" style="margin:2px 0 10px">
+      <b>Reset</b> = supprime les events de ce type (+ tirages liés) et recalcule.
+      <b>Refetch</b> = reset puis re-synchronise ce type seul (API = suivi dans l'onglet Synchronisation).</div>
+    <div class="card"><table><thead><tr>
+      <th>Type de donnée</th><th>Source</th><th class="num">Events</th><th class="num">Lignes</th>
+      <th style="width:230px">Action</th>
+    </tr></thead><tbody id="dt-tb"><tr><td colspan="5" class="spin">Chargement…</td></tr></tbody></table></div>
+  </section>
+
   <div id="dov"></div>
   <aside id="drawer"></aside>
   <div id="toast"></div>
@@ -383,10 +403,10 @@ const esc=s=>String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>
 
 /* ── tabs : init (bind) une seule fois, refresh (données) à CHAQUE retour ── */
 const inited={};
-const init={pools:initPools,users:loadUsers,logs:initLogs,points:loadPoints,days:initDays,hosts:initHosts,sync:initSync,plague:initPlague};
+const init={pools:initPools,users:loadUsers,logs:initLogs,points:loadPoints,days:initDays,hosts:initHosts,sync:initSync,plague:initPlague,data:initData};
 const refresh={pools:loadPools,users:loadUsers,logs:loadLogs,points:loadPoints,
   days:()=>$('#day-pick').value&&loadDay(),hosts:loadHosts,
-  sync:()=>{refreshSync();loadAuto();},plague:loadPlague};
+  sync:()=>{refreshSync();loadAuto();},plague:loadPlague,data:loadData};
 $$('.tab').forEach(t=>t.onclick=()=>{
   $$('.tab').forEach(x=>x.classList.toggle('on',x===t));
   $$('.pane').forEach(p=>p.classList.toggle('on',p.id==='p-'+t.dataset.tab));
@@ -825,6 +845,60 @@ async function saveSecret(){
   try{const r=await api('/panel/api/plague','POST',{secret_board_pct:$('#pl-secret').value});
     toast(`dedavid board réglé à ${r.secret_board_pct}%`);loadPlague();}
   finally{b.disabled=false;}
+}
+
+/* ── 8. Données (gestion granulaire PAR TYPE, piscine par piscine) ── */
+const SRC={api:'🌐 API 42',sheet:'📄 Google Sheet',random:'🎲 Tirage local'};
+let dtPoolId=null;
+async function initData(){
+  const d=await api('/panel/api/data');
+  $('#dt-pool').innerHTML=d.pools.map(p=>`<option value="${p.id}" ${p.is_active?'selected':''}>${esc(p.name)}${p.is_active?' (active)':''}</option>`).join('');
+  dtPoolId=$('#dt-pool').value;
+  $('#dt-pool').onchange=()=>{dtPoolId=$('#dt-pool').value;loadData();};
+  $('#dt-refresh').onclick=loadData;
+  $('#dt-reset-all').onclick=resetWholePool;
+  loadData();
+}
+async function loadData(){
+  if(!dtPoolId){$('#dt-tb').innerHTML='<tr><td colspan="5" class="empty">Aucune piscine.</td></tr>';return;}
+  const d=await api('/panel/api/pools/'+dtPoolId+'/types');
+  $('#dt-info').textContent=`${d.pool.starts_on} → ${d.pool.ends_on}`+(d.sync_running?' · ⏳ synchro en cours':'');
+  const dis=d.sync_running?'disabled':'';
+  $('#dt-tb').innerHTML=d.types.map(t=>`<tr>
+    <td><b>${esc(t.label)}</b>${t.warn?`<div style="font-size:11px;color:var(--red)">⚠️ ${esc(t.warn)}</div>`:''}</td>
+    <td class="meta">${SRC[t.source]||t.source}</td>
+    <td class="num">${t.events}</td><td class="num">${t.rows||'—'}</td>
+    <td>
+      <button class="mini" data-ref="${t.key}" data-label="${esc(t.label)}" ${t.source==='api'?dis:''}>🚀 Refetch</button>
+      <button class="mini danger" data-rst="${t.key}" data-label="${esc(t.label)}">♻️ Reset</button>
+    </td></tr>`).join('');
+  $('#dt-tb').querySelectorAll('[data-rst]').forEach(b=>b.onclick=()=>resetType(b.dataset.rst,b.dataset.label));
+  $('#dt-tb').querySelectorAll('[data-ref]').forEach(b=>b.onclick=()=>refetchType(b.dataset.ref,b.dataset.label,b));
+}
+async function resetType(key,label){
+  if(!confirm(`Reset « ${label} » : supprimer ses events + tirages liés et recalculer ?`))return;
+  const r=await api(`/panel/api/pools/${dtPoolId}/types/${key}/reset`,'POST',{});
+  const n=Object.values(r.deleted||{}).reduce((a,b)=>a+b,0);
+  toast(`« ${label} » reseté — ${n} lignes supprimées`);loadData();
+}
+async function refetchType(key,label,btn){
+  if(!confirm(`Refetch « ${label} » : reset puis re-synchro de ce type uniquement ?`))return;
+  btn.disabled=true;const t=btn.textContent;btn.textContent='⏳…';
+  try{
+    const r=await api(`/panel/api/pools/${dtPoolId}/types/${key}/refetch`,'POST',{});
+    if(r.mode==='sync')toast(`« ${label} » : synchro lancée → onglet Synchronisation`);
+    else if(r.mode==='sheet')toast(`« ${label} » : ${r.created} events ré-ingérés du sheet`);
+    else toast(`« ${label} » : re-tiré + recalculé`);
+    loadData();
+  }catch(e){toast('Échec : '+e.message,true);}
+  finally{btn.disabled=false;btn.textContent=t;}
+}
+async function resetWholePool(){
+  const name=$('#dt-pool').selectedOptions[0].textContent;
+  if(!confirm(`🧨 Reset ENTIER de « ${name} » : vide TOUS les types (events, snapshots, tirages, épidémie). Config &amp; roster conservés. Continuer ?`))return;
+  const r=await api('/panel/api/pools/'+dtPoolId+'/reset','POST',{});
+  const n=Object.values(r.deleted).reduce((a,b)=>a+b,0);
+  toast(`« ${r.pool} » resetée — ${n} lignes supprimées`);loadData();
 }
 
 /* init premier onglet */

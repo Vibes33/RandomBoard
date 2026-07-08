@@ -72,20 +72,29 @@ def detect_dates(client, logins, cursus_id):
 
 
 def run_full_sync(*, client, pool, campus, cursus, d_from=None, d_to=None,
-                  skip_users=False, on_log=None, on_progress=None, should_cancel=None):
+                  skip_users=False, scope=None, on_log=None, on_progress=None,
+                  should_cancel=None):
     """
     Rejoue/ingère `pool` jour par jour depuis l'API 42.
     `should_cancel()` (optionnel) est consulté entre chaque jour : renvoyer True
     interrompt proprement le rejeu. Retourne un résumé
     {d_from, d_to, total_days, total_events, users, cancelled}.
+
+    scope=None → tout (comportement complet). Sinon, ensemble de clés parmi
+    {users, locations, hosts, exam, feedbacks, evaluations, flags, plague,
+    trolls} : SEULS ces types sont fetchés/ré-ingérés (refetch granulaire d'un
+    seul type de données). La clôture + snapshot tournent toujours (recompute).
     """
     log = on_log or (lambda *_: None)
     prog = on_progress or (lambda **_: None)
     cancel = should_cancel or (lambda: False)
+    want = (lambda k: True) if scope is None else (lambda k: k in scope)
+    need_loc = want("locations") or want("hosts") or want("exam")
+    need_scale = want("feedbacks") or want("evaluations") or want("flags") or want("plague")
 
     # 1) étudiants de la session — cohorte filtrée sur l'année/mois de CETTE
     #    piscine (dérivés de sa date de début), pas sur les valeurs globales.
-    if not skip_users:
+    if not skip_users and want("users"):
         pool_year = str(pool.starts_on.year)
         pool_month = calendar.month_name[pool.starts_on.month].lower()  # ex: "august"
         data = fetch_campus_users(client, campus, pool_year=pool_year, pool_month=pool_month)
@@ -118,23 +127,27 @@ def run_full_sync(*, client, pool, campus, cursus, d_from=None, d_to=None,
     fetch_errors = (FtRateLimit, FtServerError) + NETWORK_ERRORS
     idx, total_events, cancelled = 0, 0, False
 
-    from .chaos import seed_plague
-    seed_plague(pool)  # jour 1 : Peste & Choléra (4+4) tirés une fois, sans reset
+    if want("plague"):
+        from .chaos import seed_plague
+        seed_plague(pool)  # jour 1 : Peste & Choléra (4+4) tirés une fois, sans reset
 
     # Trolls (Google Sheet) : ingérés AVANT la boucle des jours pour que chaque
     # snapshot les intègre (events datés, idempotents par dedup).
-    from .sync import fetch_trolls, sync_trolls
-    n_trolls, _ = sync_trolls(pool, fetch_trolls(), users)
-    if n_trolls:
-        log(f"Trolls ingérés depuis le Google Sheet : {n_trolls}")
+    if want("trolls"):
+        from .sync import fetch_trolls, sync_trolls
+        n_trolls, _ = sync_trolls(pool, fetch_trolls(), users)
+        if n_trolls:
+            log(f"Trolls ingérés depuis le Google Sheet : {n_trolls}")
 
     # Fenêtres d'examen du cursus (1 fetch pour tout le rejeu) → exam_time.
-    try:
-        exam_windows = fetch_exam_windows(client, campus, cursus)
-        log(f"Fenêtres d'examen trouvées : {len(exam_windows)}")
-    except Exception as ex:  # noqa: BLE001
-        exam_windows = []
-        log(f"Examens indisponibles ({ex}) — exam_time ignoré")
+    exam_windows = []
+    if want("exam"):
+        try:
+            exam_windows = fetch_exam_windows(client, campus, cursus)
+            log(f"Fenêtres d'examen trouvées : {len(exam_windows)}")
+        except Exception as ex:  # noqa: BLE001
+            exam_windows = []
+            log(f"Examens indisponibles ({ex}) — exam_time ignoré")
 
     for c0 in range(0, total_days, workers):
         if cancel():
@@ -142,10 +155,23 @@ def run_full_sync(*, client, pool, campus, cursus, d_from=None, d_to=None,
             cancelled = True
             break
         chunk = days[c0:c0 + workers]
-        # (a) FETCH parallèle du chunk (chaque jour = 1 thread ; les clés tournent)
+        # (a) FETCH parallèle du chunk (chaque jour = 1 thread ; les clés tournent).
+        #     Scopé : on ne récupère QUE les sources nécessaires (locations et/ou
+        #     scale_teams) — un refetch de « feedbacks » ne rappelle pas les
+        #     locations (l'appel le plus lourd).
+        from .sync import _day_bounds_utc, fetch_locations_range, fetch_scale_teams_range
+
+        def _scoped_fetch(d):
+            start, end = _day_bounds_utc(d)
+            locs = fetch_locations_range(client, campus, start, end) if need_loc else []
+            scale = (fetch_scale_teams_range(client, campus, start, end, cursus_id=cursus)
+                     if need_scale else
+                     {"feedbacks": [], "evaluations": [], "flags": [], "pairs": []})
+            return {"locations": locs, **scale}
+
         payloads = {}
         with ThreadPoolExecutor(max_workers=workers) as pool_ex:
-            futs = {pool_ex.submit(fetch_day, client, campus, d, cursus): d for d in chunk}
+            futs = {pool_ex.submit(_scoped_fetch, d): d for d in chunk}
             for fut in futs:
                 d = futs[fut]
                 try:
@@ -165,16 +191,23 @@ def run_full_sync(*, client, pool, campus, cursus, d_from=None, d_to=None,
                 continue
             final = d < today  # jour terminé → logtime + clôture ; sinon (jour
             #                     courant/futur) : seulement les events discrets.
-            n = (sync_locations(pool, p["locations"], users, score_cumulative=final)
-                 + sync_feedbacks(pool, p["feedbacks"], users)
-                 + sync_evaluations(pool, p["evaluations"], users)
-                 + sync_flags(pool, p["flags"], users)
-                 + sync_host_effects(pool, d, p["locations"], p.get("pairs", []), users)
-                 # exam_time = malus basé sur le temps → jour final uniquement
-                 + (sync_exam_time(pool, d, p["locations"], exam_windows, users) if final else 0)
-                 + sync_last_day(pool, d, p.get("pairs", []), users))
-            from .chaos import spread_plague
-            spread_plague(pool, p.get("pairs", []))  # propagation Peste & Choléra
+            n = 0
+            if want("locations"):  # logtime + reconnexion + cluster
+                n += sync_locations(pool, p["locations"], users, score_cumulative=final)
+            if want("feedbacks"):
+                n += sync_feedbacks(pool, p["feedbacks"], users)
+            if want("evaluations"):
+                n += sync_evaluations(pool, p["evaluations"], users)
+                n += sync_last_day(pool, d, p.get("pairs", []), users)
+            if want("flags"):
+                n += sync_flags(pool, p["flags"], users)
+            if want("hosts"):
+                n += sync_host_effects(pool, d, p["locations"], p.get("pairs", []), users)
+            if want("exam") and final:  # exam_time = malus basé sur le temps → jour final
+                n += sync_exam_time(pool, d, p["locations"], exam_windows, users)
+            if want("plague"):
+                from .chaos import spread_plague
+                spread_plague(pool, p.get("pairs", []))  # propagation Peste & Choléra
             if final:
                 # Clôture — même pipeline que le cron de minuit : élus du jour,
                 # aura, effets des élus (sur les gains du jour), taxe du podium,
@@ -189,7 +222,8 @@ def run_full_sync(*, client, pool, campus, cursus, d_from=None, d_to=None,
                 apply_podium_tax(pool, d)  # top 3 → bottom 10 (zéro-somme)
                 snapshot_day(pool, d)  # fige le jour
                 # régression aux examens (score < exam précédent) — après snapshot
-                apply_exam_regression(pool, d, _exam_days(exam_windows))
+                if want("exam"):
+                    apply_exam_regression(pool, d, _exam_days(exam_windows))
             else:
                 # Jour NON final : jamais de snapshot (le classement l'ajoute en
                 # live). On purge un éventuel snapshot périmé (ancien fetch qui
@@ -204,7 +238,7 @@ def run_full_sync(*, client, pool, campus, cursus, d_from=None, d_to=None,
 
     # Verdict Peste & Choléra en fin de piscine (dernier jour) une fois le rejeu
     # complet — règlement zéro-somme perdants → gagnants.
-    if not cancelled and d_to >= pool.ends_on:
+    if not cancelled and want("plague") and d_to >= pool.ends_on:
         from .chaos import plague_endgame
         plague_endgame(pool)
 

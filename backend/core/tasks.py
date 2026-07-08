@@ -71,9 +71,13 @@ def run_sync(sync_run_id):
         def should_cancel():
             return SyncRun.objects.filter(id=run.id, cancel_requested=True).exists()
 
+        scope = set(run.scope.split(",")) if run.scope else None
+        if scope:
+            run.append_log(f"Refetch scopé : {', '.join(sorted(scope))}")
+            run.save(update_fields=["log"])
         summary = run_full_sync(
             client=client, pool=pool, campus=campus, cursus=cursus,
-            d_from=run.date_from, d_to=run.date_to,
+            d_from=run.date_from, d_to=run.date_to, scope=scope,
             on_log=on_log, on_progress=on_progress, should_cancel=should_cancel,
         )
         run.finished_at = timezone.now()

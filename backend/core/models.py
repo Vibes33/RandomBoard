@@ -402,6 +402,8 @@ class SyncRun(models.Model):
                              null=True, blank=True)
     status = models.CharField(max_length=12, choices=Status.choices, default=Status.PENDING)
     cancel_requested = models.BooleanField(default=False)
+    # Refetch scopé : clés de scope séparées par des virgules (vide = sync complet).
+    scope = models.CharField(max_length=200, blank=True, default="")
     date_from = models.DateField(null=True, blank=True)
     date_to = models.DateField(null=True, blank=True)
     days_total = models.PositiveIntegerField(default=0)

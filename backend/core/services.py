@@ -27,6 +27,85 @@ ZERO = Decimal("0")
 ONE = Decimal("1")
 
 
+@transaction.atomic
+def reset_pool_data(pool, wipe_users=False):
+    """
+    Remet une piscine À ZÉRO (fonctionne pour TOUTE piscine, y compris créée à la
+    main) : vide toutes les données de JEU (events, snapshots, tirages, épidémie,
+    stacks…) pour permettre un re-fetch propre. Conserve le roster (AppUser) et la
+    config (PoolConfig : montants, taux dedavid…), en réarmant juste l'épidémie
+    (plague_seeded=False → le prochain fetch retire 4+4 patients zéro).
+
+    C'est aussi le préalable SÛR à une re-synchro complète : on repart d'un état
+    initial propre au lieu de rejouer par-dessus l'existant (cf. spread_plague
+    non idempotent).
+
+    wipe_users=True : supprime aussi les étudiants (utile après une contamination
+    de cohorte). Retourne le décompte des lignes supprimées par modèle.
+    """
+    from .models import (DailyCoefficient, DailyDesignation, DailyEventMultiplier,
+                         DailyHost, DailySnapshot, EventLog, Infection, PoolConfig,
+                         StackLedger, WeeklyDesignation, Workstation)
+    counts = {}
+    models = [EventLog, DailySnapshot, DailyCoefficient, DailyEventMultiplier,
+              DailyHost, DailyDesignation, WeeklyDesignation, Infection,
+              StackLedger, Workstation]
+    if wipe_users:
+        models.append(AppUser)
+    for Model in models:
+        deleted = Model.objects.filter(pool=pool).delete()[0]
+        if deleted:
+            counts[Model.__name__] = deleted
+    PoolConfig.objects.filter(pool=pool).update(plague_seeded=False)
+    return counts
+
+
+def data_type_stats(pool):
+    """Compteurs par TYPE de données pour l'onglet Données (events + lignes annexes)."""
+    from django.db.models import Count as _Count
+
+    from . import data_types, models as m
+    ev = {r["event_type"]: r["n"] for r in
+          EventLog.objects.filter(pool=pool, is_voided=False)
+          .values("event_type").annotate(n=_Count("id"))}
+    out = []
+    for t in data_types.DATA_TYPES:
+        rows = 0
+        for mname in t.get("models", []):
+            rows += getattr(m, mname).objects.filter(pool=pool).count()
+        out.append({"key": t["key"], "label": t["label"], "source": t["source"],
+                    "events": sum(ev.get(e, 0) for e in t["events"]),
+                    "rows": rows, "warn": t.get("warn")})
+    return out
+
+
+@transaction.atomic
+def reset_data_type(pool, key):
+    """
+    Reset d'UN SEUL type de données d'une piscine : supprime ses events (delete,
+    pas void — sinon le dedup_key bloquerait un refetch) + ses lignes annexes,
+    réarme les flags associés, puis recalcule les snapshots. Retourne le décompte.
+    """
+    from . import data_types, models as m
+    from .models import PoolConfig
+    t = data_types.BY_KEY.get(key)
+    if not t:
+        raise ValueError(f"type de données inconnu: {key}")
+    counts = {}
+    if t["events"]:
+        n = EventLog.objects.filter(pool=pool, event_type__in=t["events"]).delete()[0]
+        if n:
+            counts["events"] = n
+    for mname in t.get("models", []):
+        n = getattr(m, mname).objects.filter(pool=pool).delete()[0]
+        if n:
+            counts[mname] = n
+    for flag in t.get("flags", []):
+        PoolConfig.objects.filter(pool=pool).update(**{flag: False})
+    backfill(pool)  # les events ont changé → snapshots recalculés
+    return counts
+
+
 def day_multipliers(pool, day):
     """Dict {rule_id: multiplicateur} pour un jour. Absent ⇒ 1."""
     return {
