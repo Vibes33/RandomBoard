@@ -114,6 +114,11 @@ RULES = [
      {"type": "from_context", "value_key": "points"}),
     ("plague_payout", "event", "Peste & Choléra : gain du groupe vainqueur",
      {"type": "from_context", "value_key": "points"}),
+    # ─── trolls (Google Sheet Apps Script) : victime → malus niveau × semaine ───
+    ("troll_victim", "loss", "Trollé sur son PC (points par niveau × semaine)",
+     {"type": "level_week", "level_key": "level", "default": 0,
+      "levels": {"1": -10, "2": -20, "3": -30},
+      "week_mult": {"1": 1, "2": 1, "3": 1, "4": 1}}),
 ]
 
 
@@ -178,6 +183,9 @@ RULE_FIELDS = {
                   _f("max", "Minutes — borne haute", "value"),
                   _f("max_malus", "Malus maximum (à 240 min+)")],
     "exam_regression": [_f("points", "Malus si score en baisse vs exam précédent")],
+    "troll_victim": [_f("levels", "Niveau de troll → points", "map"),
+                     _f("week_mult", "Semaine (1-4) → multiplicateur", "map"),
+                     _f("default", "Points si niveau inconnu")],
     "last_day_corrections": [_f("factor", "Points par correction donnée")],
     "daily_blessed": [_f("pct", "% des gains du jour", "value")],
     "daily_cursed": [_f("pct", "% des gains du jour", "value")],

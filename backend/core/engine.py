@@ -205,6 +205,20 @@ def ev_map_lookup(params, ctx, rng):
     return _d(params.get("default", 0)), None
 
 
+def ev_level_week(params, ctx, rng):
+    """
+    Points par NIVEAU (map 'levels': niveau → points) multipliés par le
+    multiplicateur de SEMAINE de piscine (map 'week_mult': semaine 1..4 → ×).
+    Ex trolls : levels {"1": -10, "2": -20, "3": -30}, week_mult {"2": 1.5}.
+    Le niveau et la semaine viennent du contexte ; maps éditables au panel.
+    """
+    lvl = str(int(float(ctx.get(params.get("level_key", "level"), 1) or 1)))
+    base = float((params.get("levels") or {}).get(lvl, params.get("default", 0)))
+    week = str(int(float(ctx.get("week", 1) or 1)))
+    mult = float((params.get("week_mult") or {}).get(week, 1))
+    return _d(base * mult), {"level": lvl, "week": week, "mult": mult}
+
+
 EVALUATORS = {
     "fixed": ev_fixed,
     "linear_decay": ev_linear_decay,
@@ -218,6 +232,7 @@ EVALUATORS = {
     "keywords": ev_keywords,
     "map_lookup": ev_map_lookup,
     "tiers": ev_tiers,
+    "level_week": ev_level_week,
 }
 
 

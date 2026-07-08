@@ -128,6 +128,10 @@ CELERY_BEAT_SCHEDULE = {
 # ─── API 42 (étape 4) ───
 FT_API_BASE = env("FT_API_BASE", default="https://api.intra.42.fr")
 
+# ─── Google Sheet des trolls (Apps Script) — secrets dans .env, jamais en dur ───
+TROLL_SHEET_URL = env("TROLL_SHEET_URL", default="")
+TROLL_SHEET_PASSWORD = env("TROLL_SHEET_PASSWORD", default="")
+
 
 def _ft_credentials():
     """

@@ -418,6 +418,70 @@ def sync_last_day(pool, day, pairs, users=None):
     return created
 
 
+def fetch_trolls():
+    """
+    Récupère le journal des trolls depuis le Google Sheet (Apps Script).
+    URL + mot de passe vivent dans .env (settings) — jamais dans le code.
+    Renvoie des dicts normalisés : {at, troll, author, victim, level,
+    destructive, permanent}. Liste vide si non configuré ou si l'endpoint échoue.
+    """
+    import requests
+    from django.conf import settings as dj_settings
+    url = dj_settings.TROLL_SHEET_URL
+    pwd = dj_settings.TROLL_SHEET_PASSWORD
+    if not url or not pwd:
+        return []
+    try:
+        resp = requests.get(url, params={"password": pwd}, timeout=20)
+        resp.raise_for_status()
+        rows = resp.json()
+    except Exception as ex:  # noqa: BLE001 — sheet KO ⇒ on n'ingère rien
+        log.warning("fetch_trolls: %s", ex)
+        return []
+    out = []
+    for row in rows[1:]:  # ligne 0 = en-têtes ; colonnes >7 = stats annexes, ignorées
+        if not row or not row[0]:
+            continue
+        try:
+            out.append({"at": str(row[0]), "troll": str(row[1] or ""),
+                        "author": str(row[2] or ""), "victim": str(row[3] or ""),
+                        "level": int(float(row[4] or 1)),
+                        "destructive": bool(row[5]), "permanent": bool(row[6])})
+        except (ValueError, TypeError, IndexError):
+            continue
+    return out
+
+
+def sync_trolls(pool, trolls, users=None):
+    """
+    Victime trollée → malus `troll_victim` (points par niveau × multiplicateur
+    de la semaine de piscine, cf. évaluateur level_week). Idempotent par
+    (horodatage, victime, nom du troll) ; renvoie (créés, 1er jour touché) pour
+    permettre un recompute si des events atterrissent sur des jours déjà figés.
+    """
+    users = users or _users(pool)
+    created, first_day = 0, None
+    for t in trolls:
+        u = users.get(t.get("victim"))
+        at = _parse(t.get("at"))
+        if not u or not at:
+            continue
+        day = timezone.localdate(at)
+        if not (pool.starts_on <= day <= pool.ends_on):
+            continue  # troll hors piscine (autre session) — ignoré
+        week = min(4, max(1, (day - pool.starts_on).days // 7 + 1))
+        if record_event(
+                user=u, pool=pool, rule_key="troll_victim", occurred_at=at,
+                context={"level": t.get("level", 1), "week": week,
+                         "troll": t.get("troll", ""), "author": t.get("author", "")},
+                source=API,
+                dedup_key=f"troll:{t.get('at')}:{t.get('victim')}:{t.get('troll')}"[:200]):
+            created += 1
+            if first_day is None or day < first_day:
+                first_day = day
+    return created, first_day
+
+
 def sync_all(pool, data, *, score_cumulative=False):
     """
     Ingestion « jour courant » (poll live). score_cumulative=False par défaut :

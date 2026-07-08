@@ -207,12 +207,14 @@ def poll_42():
     Les jours passés restent figés (snapshots) ; nightly_snapshot clôt la veille.
     No-op sans clés API.
     """
-    from .sync import fetch_exam_windows
+    from .services import recompute_from
+    from .sync import fetch_exam_windows, fetch_trolls, sync_trolls
     client = FtClient()
     if not client.configured:
         return {"skipped": "aucune clé API configurée"}
     today = timezone.localdate()
     out = {}
+    trolls = fetch_trolls()  # Google Sheet des trolls (vide si non configuré)
     for pool in Pool.objects.filter(is_active=True):
         # on ne poll QUE la piscine en cours (évite de polluer un pool de test/historique)
         if not (pool.starts_on <= today <= pool.ends_on):
@@ -225,7 +227,12 @@ def poll_42():
             data["exam_windows"] = fetch_exam_windows(client, campus, cursus)
         except Exception:  # noqa: BLE001 — exam_time ignoré si l'endpoint échoue
             data["exam_windows"] = []
-        out[pool.slug] = sync_all(pool, data)
+        res = sync_all(pool, data)
+        n_trolls, first_day = sync_trolls(pool, trolls)
+        if n_trolls and first_day and first_day < today:
+            recompute_from(pool, first_day)  # troll tardif sur un jour déjà figé
+        res["trolls"] = n_trolls
+        out[pool.slug] = res
     return out
 
 

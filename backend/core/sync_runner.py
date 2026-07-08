@@ -121,6 +121,13 @@ def run_full_sync(*, client, pool, campus, cursus, d_from=None, d_to=None,
     from .chaos import seed_plague
     seed_plague(pool)  # jour 1 : Peste & Choléra (4+4) tirés une fois, sans reset
 
+    # Trolls (Google Sheet) : ingérés AVANT la boucle des jours pour que chaque
+    # snapshot les intègre (events datés, idempotents par dedup).
+    from .sync import fetch_trolls, sync_trolls
+    n_trolls, _ = sync_trolls(pool, fetch_trolls(), users)
+    if n_trolls:
+        log(f"Trolls ingérés depuis le Google Sheet : {n_trolls}")
+
     # Fenêtres d'examen du cursus (1 fetch pour tout le rejeu) → exam_time.
     try:
         exam_windows = fetch_exam_windows(client, campus, cursus)
