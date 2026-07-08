@@ -52,6 +52,18 @@ def _void_daily(user, pool, event_type, day):
     ).update(is_voided=True)
 
 
+def _cap_to_day(dt, day):
+    """
+    Ramène un datetime dans les bornes du JOUR `day` (heure locale). Sert à dater
+    les agrégats journaliers (logtime, cluster…) à l'heure RÉELLE de la dernière
+    session — sans jamais déborder sur le jour suivant (une session qui finit
+    après minuit resterait sinon comptée le lendemain via localdate()).
+    """
+    lo = timezone.make_aware(datetime.combine(day, dtime.min))
+    hi = timezone.make_aware(datetime.combine(day, dtime(23, 59, 59)))
+    return min(max(dt, lo), hi)
+
+
 def _cluster_of(host_list):
     """Extrait le cluster d'un poste (ex: 'c1r2p3' → 'c1'). '' si introuvable."""
     for h in host_list:
@@ -109,6 +121,7 @@ def sync_locations(pool, locations, users=None, *, score_cumulative=True):
     users = users or _users(pool)
     minutes = defaultdict(float)
     hosts = defaultdict(list)
+    last_end = {}  # (uid, day) → fin de la DERNIÈRE session du jour (heure réelle)
     seen_hosts = set()
     created = 0
 
@@ -124,6 +137,9 @@ def sync_locations(pool, locations, users=None, *, score_cumulative=True):
         host = loc.get("host", "")
         minutes[(u.id, day)] += max(0.0, (e - b).total_seconds() / 60)
         hosts[(u.id, day)].append(host)
+        cur = last_end.get((u.id, day))
+        if cur is None or e > cur:
+            last_end[(u.id, day)] = e
         if host:
             seen_hosts.add(host)
 
@@ -137,7 +153,8 @@ def sync_locations(pool, locations, users=None, *, score_cumulative=True):
     presence = _presence_set(pool)  # 1 requête, streaks calculés en mémoire
     for (uid, day), mins in minutes.items():
         u = id_to_user[uid]
-        occurred = timezone.make_aware(datetime.combine(day, dtime(12, 0)))
+        # heure RÉELLE (dernière session du jour) au lieu d'un midi figé
+        occurred = _cap_to_day(last_end[(uid, day)], day)
 
         # ── Famille logtime : SEULEMENT si le jour est final (score_cumulative) ──
         if not score_cumulative:
@@ -195,7 +212,7 @@ def sync_locations(pool, locations, users=None, *, score_cumulative=True):
     for (uid, day), hlist in hosts.items():
         if len(hlist) != len(set(hlist)):
             u = id_to_user[uid]
-            occurred = timezone.make_aware(datetime.combine(day, dtime(12, 0)))
+            occurred = _cap_to_day(last_end[(uid, day)], day)
             _void_daily(u, pool, "reconnect_same_pc", day)
             record_event(user=u, pool=pool, rule_key="reconnect_same_pc", occurred_at=occurred,
                          context={}, source=API)
@@ -331,26 +348,29 @@ def sync_host_effects(pool, day, locations, pairs=None, users=None):
     kinds = {dh.hostname: dh.kind for dh in DailyHost.objects.filter(pool=pool, day=day)}
     if not kinds:
         return 0
-    # première place spéciale sur laquelle chaque étudiant s'est assis ce jour-là
+    # première place spéciale sur laquelle chaque étudiant s'est assis ce jour-là,
+    # avec l'heure RÉELLE de cette connexion (au lieu d'un midi figé).
     shiny_host_of, cursed_host_of = {}, {}
     for loc in locations:
         login = loc.get("login")
         k = kinds.get(loc.get("host") or "")
         if not login or not k:
             continue
+        when = _parse(loc.get("begin_at"))
         if k == "shiny" and login not in shiny_host_of:
-            shiny_host_of[login] = loc.get("host")
+            shiny_host_of[login] = (loc.get("host"), when)
         elif k == "cursed" and login not in cursed_host_of:
-            cursed_host_of[login] = loc.get("host")
+            cursed_host_of[login] = (loc.get("host"), when)
 
-    occurred = timezone.make_aware(datetime.combine(day, dtime(12, 0)))
     created = 0
-    seats = ([("shiny_host", "shinyhost", lg, h) for lg, h in shiny_host_of.items()]
-             + [("cursed_host", "cursedhost", lg, h) for lg, h in cursed_host_of.items()])
-    for rule_key, tag, login, host in seats:
+    seats = ([("shiny_host", "shinyhost", lg, h, w) for lg, (h, w) in shiny_host_of.items()]
+             + [("cursed_host", "cursedhost", lg, h, w) for lg, (h, w) in cursed_host_of.items()])
+    for rule_key, tag, login, host, when in seats:
         u = users.get(login)
         if not u:
             continue
+        occurred = _cap_to_day(when, day) if when else \
+            timezone.make_aware(datetime.combine(day, dtime(12, 0)))
         if record_event(user=u, pool=pool, rule_key=rule_key, occurred_at=occurred,
                         context={"host": host}, source=API,
                         dedup_key=f"{tag}:{login}:{day.isoformat()}"):
