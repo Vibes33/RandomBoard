@@ -58,10 +58,12 @@ _SECRET_LOGIN = "dedavid"
 _SECRET_CHANCE = 0.01
 
 # Mise en page multi-colonnes : TOUS les participants côte à côte, ~20 lignes
-# par colonne, jusqu'à 5 colonnes (largeur bornée à ~95 car.). Au-delà de 100
-# participants la grille grandit en hauteur (5 colonnes plus longues).
+# par colonne, jusqu'à 5 colonnes. La largeur TOTALE est bornée à 80 caractères
+# (terminal standard type Ubuntu) : le nombre de colonnes s'adapte pour ne
+# JAMAIS wrapper ; ?cols=N force la valeur sur les grands écrans.
 _PER_COL = 20
 _MAX_COLS = 5
+_TARGET_WIDTH = 80
 
 
 def _hyperlink(url, text, enabled=True):
@@ -93,7 +95,8 @@ def _ansi(colored):
     }
 
 
-def _render_board(pool, board, colored=True, links=True, me=None, secret_chance=None):
+def _render_board(pool, board, colored=True, links=True, me=None, secret_chance=None,
+                  force_cols=None):
     """
     Classement curl-able, TOUS les participants en grille multi-colonnes (jusqu'à
     5 colonnes côte à côte, ~20 lignes chacune) pour rester compact en largeur
@@ -130,15 +133,22 @@ def _render_board(pool, board, colored=True, links=True, me=None, secret_chance=
     my_row = None if secret else next(
         (r for r in shown if r["login"].lower() == me), None) if me else None
 
-    # On met le PLUS de colonnes possible (≤ _MAX_COLS) pour minimiser la hauteur.
-    ncols = max(1, min(_MAX_COLS, (n + _PER_COL - 1) // _PER_COL))
-    rows = max(1, (n + ncols - 1) // ncols)
-
     rw = max(2, len(str(total)))                                    # largeur du rang
     lw = min(max((len(login_of(r)) for r in shown), default=6), 8)  # largeur login
     pw = max(4, max((len(str(round(r["total"]))) for r in shown), default=4))
     cellw = rw + 1 + lw + 1 + pw
     sep = indent = "  "
+
+    # Nombre de colonnes : le PLUS possible pour minimiser la hauteur, MAIS la
+    # ligne complète (indent + cellules + séparateurs) doit tenir dans un
+    # terminal standard de 80 colonnes — sinon ça wrappe et tout est illisible.
+    # ?cols=N (1..6) force la valeur pour les grands écrans.
+    budget = _TARGET_WIDTH - len(indent)
+    fit = max(1, (budget + len(sep)) // (cellw + len(sep)))
+    ncols = max(1, min(_MAX_COLS, (n + _PER_COL - 1) // _PER_COL, fit))
+    if force_cols:
+        ncols = max(1, min(6, force_cols))
+    rows = max(1, (n + ncols - 1) // ncols)
     total_w = ncols * cellw + (ncols - 1) * len(sep)
 
     def cell(r):
@@ -222,8 +232,12 @@ def leaderboard_preview(request, me=None):
     me = me or request.GET.get("me")
     from .chaos import get_config
     chance = float(get_config(pool).secret_board_chance)
+    try:
+        force_cols = int(request.GET.get("cols", "")) or None  # ?cols=5 : écran large
+    except ValueError:
+        force_cols = None
     body = _render_board(pool, board, colored=colored, links=links, me=me,
-                         secret_chance=chance)
+                         secret_chance=chance, force_cols=force_cols)
     return HttpResponse(body, content_type="text/plain; charset=utf-8")
 
 

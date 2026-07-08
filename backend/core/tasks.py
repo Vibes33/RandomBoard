@@ -231,15 +231,28 @@ def poll_42():
 
 @shared_task
 def sync_campus_users():
-    """Actualise quotidiennement la liste des étudiants de la piscine ciblée."""
+    """
+    Actualise quotidiennement la liste des étudiants de chaque piscine active.
+    La cohorte (campus + année/mois) est dérivée de CHAQUE piscine — jamais des
+    valeurs globales du .env : un .env pointant sur une vieille cohorte faisait
+    fusionner les users de deux piscines (cf. incident 07/2026).
+    """
+    import calendar
+
     from .sync import fetch_campus_users, sync_users
     client = FtClient()
-    if not client.configured or not settings.FT_CAMPUS_ID:
-        return {"skipped": "clés ou FT_CAMPUS_ID manquants"}
+    if not client.configured:
+        return {"skipped": "clés API manquantes"}
     out = {}
     for pool in Pool.objects.filter(is_active=True):
-        data = fetch_campus_users(client, settings.FT_CAMPUS_ID,
-                                  pool_year=settings.FT_POOL_YEAR,
-                                  pool_month=settings.FT_POOL_MONTH)
+        campus = pool.campus_id or settings.FT_CAMPUS_ID
+        if not campus:
+            out[pool.slug] = "campus inconnu — ignoré"
+            continue
+        data = fetch_campus_users(
+            client, campus,
+            pool_year=str(pool.starts_on.year),
+            pool_month=calendar.month_name[pool.starts_on.month].lower(),
+        )
         out[pool.slug] = sync_users(pool, data)
     return out

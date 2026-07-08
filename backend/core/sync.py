@@ -638,20 +638,41 @@ def fetch_exam_sessions(client, campus_id, cursus_id):
 
 
 def sync_users(pool, users_data):
-    """Crée/actualise les AppUser de la Piscine à partir des données 42."""
-    created = updated = 0
+    """
+    Crée/actualise les AppUser de la Piscine à partir des données 42.
+
+    GARDE-FOU : un user EXISTANT n'est JAMAIS déplacé vers une autre piscine —
+    seule son identité (intra_id, nom) est rafraîchie. Avant : update_or_create
+    écrasait `pool`, et un fetch de cohorte mal ciblé (cron avec l'année/mois
+    globaux du .env) FUSIONNAIT silencieusement deux piscines en une.
+    """
+    created = updated = skipped = 0
     for u in users_data:
         login = u.get("login")
         if not login:
             continue
-        obj, was_created = AppUser.objects.update_or_create(
+        obj, was_created = AppUser.objects.get_or_create(
             login=login,
             defaults={"pool": pool, "intra_id": u.get("intra_id"),
                       "display_name": u.get("display_name", "")},
         )
-        created += int(was_created)
-        updated += int(not was_created)
-    return {"created": created, "updated": updated}
+        if was_created:
+            created += 1
+            continue
+        if obj.pool_id != pool.id:  # appartient à une AUTRE piscine → on ne touche pas
+            skipped += 1
+            continue
+        fields = []
+        if u.get("intra_id") and obj.intra_id != u["intra_id"]:
+            obj.intra_id = u["intra_id"]
+            fields.append("intra_id")
+        if u.get("display_name") and obj.display_name != u["display_name"]:
+            obj.display_name = u["display_name"]
+            fields.append("display_name")
+        if fields:
+            obj.save(update_fields=fields)
+        updated += 1
+    return {"created": created, "updated": updated, "skipped_other_pool": skipped}
 
 
 def _day_bounds_utc(day):
