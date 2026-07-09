@@ -223,10 +223,14 @@
   <section class="pane" id="p-logs">
     <div class="bar">
       <span class="sec" style="margin:0">Filtrer</span>
+      <input id="f-q" placeholder="rechercher (flag, projet, script, login…)" style="width:250px" autocomplete="off">
       <select id="f-user"><option value="">Tous les users</option></select>
       <select id="f-event"><option value="">Tous les events</option></select>
       <button class="mini" id="f-apply">Appliquer</button>
+      <button class="mini ghost" id="f-clear">✕</button>
+      <span class="calc" id="logs-count"></span>
     </div>
+    <div class="calc" style="margin:0 0 8px">Clique une ligne pour le détail (flag, projet, script, tirage…).</div>
     <div class="card"><table><thead><tr>
       <th>Date</th><th>Login</th><th>Event</th><th>Source</th><th>Jour</th><th class="num">Points</th>
     </tr></thead><tbody id="logs-tb"><tr><td colspan="6" class="spin">Chargement…</td></tr></tbody></table></div>
@@ -566,24 +570,42 @@ async function adjust(id){
   toast('Score ajusté → '+r.total); loadUsers();
 }
 
-/* ── 2. Logs ── */
+/* ── 2. Logs (recherche serveur + clic-détail) ── */
 async function initLogs(){
   const d=await api('/panel/api/logs');
-  $('#f-user').innerHTML='<option value="">Tous les users</option>'+d.users.map(u=>`<option>${u}</option>`).join('');
-  $('#f-event').innerHTML='<option value="">Tous les events</option>'+d.events.map(e=>`<option>${e}</option>`).join('');
+  $('#f-user').innerHTML='<option value="">Tous les users</option>'+d.users.map(u=>`<option>${esc(u)}</option>`).join('');
+  $('#f-event').innerHTML='<option value="">Tous les events</option>'+d.events.map(e=>`<option value="${esc(e.key)}">${esc(e.label)}</option>`).join('');
   $('#f-apply').onclick=loadLogs;
-  renderLogs(d.logs);
+  $('#f-user').onchange=loadLogs; $('#f-event').onchange=loadLogs;
+  $('#f-q').addEventListener('keydown',e=>{if(e.key==='Enter')loadLogs();});
+  $('#f-clear').onclick=()=>{$('#f-q').value='';$('#f-user').value='';$('#f-event').value='';loadLogs();};
+  renderLogs(d);
 }
 async function loadLogs(){
-  const d=await api(`/panel/api/logs?user=${encodeURIComponent($('#f-user').value)}&event=${encodeURIComponent($('#f-event').value)}`);
-  renderLogs(d.logs);
+  const p=new URLSearchParams();
+  if($('#f-user').value)p.set('user',$('#f-user').value);
+  if($('#f-event').value)p.set('event',$('#f-event').value);
+  if($('#f-q').value.trim())p.set('q',$('#f-q').value.trim());
+  renderLogs(await api('/panel/api/logs?'+p.toString()));
 }
-function renderLogs(logs){
-  $('#logs-tb').innerHTML=logs.length?logs.map(l=>`<tr><td class="meta">${l.at}</td><td><b>${esc(l.login)}</b></td>
-    <td>${esc(l.event)}${l.reason?`<div style="font-size:11px;color:var(--gold)">« ${esc(l.reason)} »${l.by?` — ${esc(l.by)}`:''}</div>`:''}</td>
-    <td class="meta">${esc(l.source)}</td><td class="meta">${l.day}</td>
-    <td class="num">${money(l.points)}</td></tr>`).join('')
+function renderLogs(d){
+  const logs=d.logs||[];
+  $('#logs-count').textContent=logs.length
+    ?`${d.shown} affichés${d.total>d.shown?` / ${d.total} (affine la recherche)`:''}`:'';
+  $('#logs-tb').innerHTML=logs.length?logs.map(l=>`<tr class="lrow" data-id="${l.id}" style="cursor:pointer">
+      <td class="meta">${l.at||'—'}</td><td><b>${esc(l.login)}</b></td>
+      <td>${esc(l.event)}<span class="calc" style="margin-left:6px">${esc(l.key)}</span></td>
+      <td class="meta">${esc(l.source)}</td><td class="meta">${l.day}</td>
+      <td class="num">${money(l.points)}</td></tr>
+    <tr class="ldetail" data-for="${l.id}" style="display:none"><td colspan="6" style="background:var(--card)">
+      <div style="padding:6px 4px;font-size:13px">${esc(l.detail||l.event)}</div>
+      <div class="calc">source ${esc(l.source)} · jour ${l.day} · points bruts ${money(l.points)}${l.reason?` · raison « ${esc(l.reason)} »${l.by?' — '+esc(l.by):''}`:''}</div>
+    </td></tr>`).join('')
     :'<tr><td colspan="6" class="empty">Aucun log.</td></tr>';
+  $('#logs-tb').querySelectorAll('.lrow').forEach(r=>r.onclick=()=>{
+    const d=$('#logs-tb').querySelector(`.ldetail[data-for="${r.dataset.id}"]`);
+    if(d)d.style.display=d.style.display==='none'?'':'none';
+  });
 }
 
 /* ── 3. Options de Points (schéma dynamique + recherche live) ── */

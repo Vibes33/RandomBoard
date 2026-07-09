@@ -494,6 +494,13 @@ def _log_detail(event, rule_label, mult, final):
         bits.append(f"projet {ctx['project']}")
     if ctx.get("flag"):
         bits.append(f"flag « {ctx['flag']} »")
+    if ctx.get("troll"):
+        troll = f"script « {ctx['troll']} »"
+        if ctx.get("author"):
+            troll += f" par {ctx['author']}"
+        if ctx.get("level"):
+            troll += f" · niv {ctx['level']}"
+        bits.append(troll)
     if ctx.get("reason"):
         bits.append(f"« {ctx['reason']} »")
     if roll.get("matched"):
@@ -579,30 +586,50 @@ def api_user_logs(request, user_id):
 
 
 # ─────────────────────────── 2. Logs ───────────────────────────
+_LOG_LIMIT = 1500
+
+
 @staff_required
 def api_logs(request):
     pool = _pool()
     if not pool:
-        return JsonResponse({"logs": [], "users": [], "events": []})
+        return JsonResponse({"logs": [], "users": [], "events": [], "total": 0})
+    labels = {r.key: r.label for r in Rule.objects.all()}
     qs = EventLog.objects.filter(pool=pool, is_voided=False).select_related("user")
     if request.GET.get("user"):
         qs = qs.filter(user__login=request.GET["user"])
     if request.GET.get("event"):
         qs = qs.filter(event_type=request.GET["event"])
+    # Recherche texte SERVEUR : atteint n'importe quel log (flag, projet, script…)
+    # même au-delà de la limite d'affichage, contrairement au filtre client.
+    q = request.GET.get("q", "").strip()
+    if q:
+        qs = qs.filter(
+            Q(user__login__icontains=q) | Q(event_type__icontains=q)
+            | Q(raw_payload__flag__icontains=q) | Q(raw_payload__project__icontains=q)
+            | Q(raw_payload__reason__icontains=q) | Q(raw_payload__troll__icontains=q)
+            | Q(raw_payload__author__icontains=q) | Q(raw_payload__cluster__icontains=q))
+    total = qs.count()
     logs = [{
-        "at": _local(e.occurred_at), "login": e.user.login,
-        "event": e.event_type, "source": e.source,
-        "points": float(e.raw_points), "day": e.event_date.strftime("%d/%m"),
-        # raison d'un ajustement manuel (+ auteur) → visible dans l'onglet Logs
+        "id": e.id, "at": _local(e.occurred_at), "login": e.user.login,
+        "event": labels.get(e.event_type, e.event_type), "key": e.event_type,
+        "source": e.source, "points": float(e.raw_points),
+        "day": e.event_date.strftime("%d/%m"),
+        "detail": _log_detail(e, labels.get(e.event_type, e.event_type), 1, e.raw_points),
         "reason": (e.raw_payload or {}).get("reason", ""),
         "by": (e.raw_payload or {}).get("by", ""),
-    } for e in qs.order_by("-occurred_at")[:400]]
+    } for e in qs.order_by("-occurred_at")[:_LOG_LIMIT]]
+    # Types réellement présents (non-voidés) → tous cochables dans le filtre.
+    # order_by("event_type") est OBLIGATOIRE : sans lui, l'ordering par défaut du
+    # modèle (-occurred_at) s'ajoute au DISTINCT et casse la déduplication.
+    present = list(EventLog.objects.filter(pool=pool, is_voided=False)
+                   .order_by("event_type").values_list("event_type", flat=True).distinct())
     return JsonResponse({
-        "logs": logs,
+        "logs": logs, "total": total, "shown": len(logs), "limit": _LOG_LIMIT,
         "users": list(AppUser.objects.filter(pool=pool).order_by("login")
                       .values_list("login", flat=True)),
-        "events": list(EventLog.objects.filter(pool=pool)
-                       .values_list("event_type", flat=True).distinct().order_by("event_type")),
+        "events": [{"key": k, "label": labels.get(k, k)}
+                   for k in sorted(present, key=lambda x: labels.get(x, x))],
     })
 
 

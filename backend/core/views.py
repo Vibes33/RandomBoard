@@ -66,13 +66,17 @@ _MAX_COLS = 5
 _TARGET_WIDTH = 80
 
 # Tips « toujours utiles » (piochés en plus d'un éventuel tip contextuel).
+# RÈGLE : aucune info sur le barème — le système de points reste OPAQUE.
+# On ne mentionne jamais un gain/malus, une règle ou une mécanique de score.
 _GENERAL_TIPS = [
-    "Corrigez un max : chaque correction propage la Peste & le Choléra.",
-    "Logtime raisonnable > logtime de 24h — au-delà de 14h, c'est malus.",
-    "Un feedback sympa rapporte des points (« quoi » sans « feur » = malus).",
-    "Fuyez les places maudites, ruez-vous sur les places bénites.",
-    "Restez discret : se faire scripter, ça pique au classement.",
-    "Le jackpot de la minute existe… tentez le logtime pile à 1 min.",
+    "Le classement est un mystère… concentre-toi sur ton code.",
+    "Lis les sujets jusqu'au bout avant de te lancer.",
+    "Teste ton code avant de rendre : les edge cases piègent tout le monde.",
+    "Hydrate-toi et dors un peu — le marathon est long.",
+    "Pose des questions",
+    "Commit souvent, code proprement, respecte la Norme.",
+    "Fais des pauses : un cerveau reposé debug plus vite.",
+    "Reste humble et curieux — c'est ça, l'esprit 42.",
 ]
 
 
@@ -98,7 +102,7 @@ def _pool_tips(pool, today, n=2):
         ctx.append("Dernière ligne droite — l'examen final décide de tout.")
     # les contextuels sont prioritaires (pondérés ×2) puis on complète au général
     pool_tips = ctx * 2 + _GENERAL_TIPS
-    picks, seen = [], set()
+    picks, seen = [], set() 
     while pool_tips and len(picks) < n:
         t = random.choice(pool_tips)
         if t not in seen:
@@ -137,8 +141,11 @@ def _ansi(colored):
     }
 
 
+_DISEASE_EMOJI = {"peste": "🐀", "cholera": "💧"}
+
+
 def _render_board(pool, board, colored=True, links=True, me=None, secret_chance=None,
-                  force_cols=None):
+                  force_cols=None, diseases=None):
     """
     Classement curl-able, TOUS les participants en grille multi-colonnes (jusqu'à
     5 colonnes côte à côte, ~20 lignes chacune) pour rester compact en largeur
@@ -175,10 +182,22 @@ def _render_board(pool, board, colored=True, links=True, me=None, secret_chance=
     my_row = None if secret else next(
         (r for r in shown if r["login"].lower() == me), None) if me else None
 
+    # Badges Peste 🐀 / Choléra 💧 par user (hors mode secret). Un slot de 3
+    # cellules d'affichage est réservé pour tous (emoji large = 2 cellules + 1
+    # espace, ou 3 espaces pour un sain) → l'alignement de la grille reste bon.
+    show_badges = bool(diseases) and not secret
+
+    def badge(r):
+        if not show_badges:
+            return ""
+        emo = _DISEASE_EMOJI.get(diseases.get(r["login"]))
+        return f"{emo} " if emo else "   "  # 2 (emoji) + 1 espace, sinon 3 espaces
+    bw = 3 if show_badges else 0
+
     rw = max(2, len(str(total)))                                    # largeur du rang
     lw = min(max((len(login_of(r)) for r in shown), default=6), 8)  # largeur login
     pw = max(4, max((len(str(round(r["total"]))) for r in shown), default=4))
-    cellw = rw + 1 + lw + 1 + pw
+    cellw = rw + 1 + bw + lw + 1 + pw
     sep = indent = "  "
 
     # Nombre de colonnes : le PLUS possible pour minimiser la hauteur, MAIS la
@@ -206,12 +225,13 @@ def _render_board(pool, board, colored=True, links=True, me=None, secret_chance=
         # Surbrillance du login demandé (?me=) : gras + vidéo inversée sur toute la
         # cellule, SANS reset intermédiaire (sinon l'inversion « saute »). Le lien
         # OSC 8 ne contient pas de SGR, donc l'inversion tient dessous.
+        bdg = badge(r)
         if colored and me and login_of(r).lower() == me:
             hl = f"{_ESC}1m{_ESC}7m"
-            return f"{hl}{rank:>{rw}} {linked}{pad} {pts:>{pw}}{p['reset']}"
+            return f"{hl}{rank:>{rw}} {bdg}{linked}{pad} {pts:>{pw}}{p['reset']}"
         rc = {1: p["gold"], 2: p["silver"], 3: p["bronze"]}.get(rank, p["muted"])
         pcol = p["green"] if pts >= 0 else p["red"]
-        return (f"{rc}{rank:>{rw}}{p['reset']} {p['cream']}{linked}{p['reset']}{pad} "
+        return (f"{rc}{rank:>{rw}}{p['reset']} {bdg}{p['cream']}{linked}{p['reset']}{pad} "
                 f"{pcol}{pts:>{pw}}{p['reset']}")
 
     def divider():
@@ -225,6 +245,8 @@ def _render_board(pool, board, colored=True, links=True, me=None, secret_chance=
         f"   {p['muted']}{scope}{p['reset']}",
         f"{indent}{p['muted']}{pool.name} · {pool.starts_on:%d/%m} → {pool.ends_on:%d/%m/%Y}{p['reset']}",
     ]
+    if show_badges:  # légende des badges d'infection
+        lines.append(f"{indent}{p['muted']}{p['reset']}")
     # Note « c'est toi » quand ?me= est fourni (rang + points, ou introuvable).
     if me and not secret:
         if my_row:
@@ -279,8 +301,16 @@ def leaderboard_preview(request, me=None):
     except ValueError:
         force_cols = None
     body = _render_board(pool, board, colored=colored, links=links, me=me,
-                         secret_chance=chance, force_cols=force_cols)
+                         secret_chance=chance, force_cols=force_cols,
+                         diseases=_disease_map(pool))
     return HttpResponse(body, content_type="text/plain; charset=utf-8")
+
+
+def _disease_map(pool):
+    """{login: 'peste'|'cholera'} des étudiants infectés (badges du leaderboard)."""
+    from .models import Infection
+    return dict(Infection.objects.filter(pool=pool)
+                .values_list("user__login", "disease"))
 
 
 def leaderboard_html(request, me=None):
@@ -302,12 +332,14 @@ def leaderboard_html(request, me=None):
     me = (me or request.GET.get("me") or "").lower() or None
     from .chaos import get_config
     secret = random.random() < float(get_config(pool).secret_board_chance)
+    diseases = {} if secret else _disease_map(pool)
     rows = [{**r, "display": _SECRET_LOGIN if secret else r["login"],
-             "hl": bool(me and not secret and r["login"].lower() == me)}
+             "hl": bool(me and not secret and r["login"].lower() == me),
+             "badge": _DISEASE_EMOJI.get(diseases.get(r["login"]), "")}
             for r in board]
     my_row = None if secret else next(
         (r for r in board if r["login"].lower() == me), None) if me else None
     return render(request, "core/leaderboard.html", {
         "pool": pool, "rows": rows, "secret": secret, "me": me, "my_row": my_row,
-        "tips": _pool_tips(pool, timezone.localdate()),
+        "tips": _pool_tips(pool, timezone.localdate()), "has_badges": bool(diseases),
     })
