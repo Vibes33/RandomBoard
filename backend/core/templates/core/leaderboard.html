@@ -44,7 +44,7 @@
 <body>
   <h1>{% if secret %}✦ dedavid board ✦{% else %}✦ 42 — Leaderboard ✦{% endif %}</h1>
   <div class="sub">{{ pool.name }} · {{ pool.starts_on|date:"d/m" }} → {{ pool.ends_on|date:"d/m/Y" }} · {{ rows|length }} participants</div>
-  {% if has_badges %}<div class="sub">🐀 Peste · 💧 Choléra</div>{% endif %}
+  {% if has_badges %}<div class="sub"> Peste · 💧 Choléra</div>{% endif %}
   {% if me %}
     {% if my_row %}<div class="me">➤ toi : #{{ my_row.rank }} · {{ my_row.total|floatformat:0 }} pts</div>
     {% else %}<div class="me nf">(« {{ me }} » introuvable au classement)</div>{% endif %}

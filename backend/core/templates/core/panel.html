@@ -333,7 +333,7 @@
       <div class="prog"><i id="pl-bar" style="width:0%"></i></div>
     </div>
     <div class="cols">
-      <div class="card"><div class="hdr" style="color:var(--green)">🐀 Peste <span id="pl-peste-n" class="calc"></span></div>
+      <div class="card"><div class="hdr" style="color:var(--green)"> Peste <span id="pl-peste-n" class="calc"></span></div>
         <div style="padding:14px 16px" id="pl-peste"><div class="spin">Chargement…</div></div></div>
       <div class="card"><div class="hdr" style="color:var(--blue)">💧 Choléra <span id="pl-cholera-n" class="calc"></span></div>
         <div style="padding:14px 16px" id="pl-cholera"><div class="spin">Chargement…</div></div></div>
@@ -525,7 +525,7 @@ function renderUsers(){
 }
 
 /* ── Profil étudiant (drawer + drill-down) ── */
-const FACT={peste:'🐀 Peste',cholera:'💧 Choléra',neutre:'• Neutre'};
+const FACT={peste:' Peste',cholera:'💧 Choléra',neutre:'• Neutre'};
 function closeDrawer(){$('#dov').classList.remove('on');$('#drawer').classList.remove('on');}
 $('#dov').onclick=closeDrawer;
 document.addEventListener('keydown',e=>{if(e.key==='Escape')closeDrawer();});
@@ -841,7 +841,7 @@ async function loadPlague(){
   if(!stats){$('#pl-title').textContent='Aucune piscine active.';return;}
   $('#pl-inf').textContent=stats.infected;$('#pl-healthy').textContent=stats.healthy;
   $('#pl-total').textContent=stats.total;
-  $('#pl-leader').textContent=stats.leader?({peste:'🐀 Peste',cholera:'💧 Choléra',égalité:'égalité'}[stats.leader]||stats.leader):'—';
+  $('#pl-leader').textContent=stats.leader?({peste:' Peste',cholera:'💧 Choléra',égalité:'égalité'}[stats.leader]||stats.leader):'—';
   $('#pl-bar').style.width=stats.pct+'%';
   $('#pl-peste-n').textContent='· '+stats.peste.count+' inf.';
   $('#pl-cholera-n').textContent='· '+stats.cholera.count+' inf.';

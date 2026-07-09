@@ -34,6 +34,10 @@ API = EventLog.Source.API_42
 _LOGTIME_RULES = ("logtime_minute", "logtime_high",
                   "midnight_bonus", "assiduity_streak")
 
+# Note minimale pour considérer un projet comme VALIDÉ : en dessous, un projet
+# évalué ne rapporte aucun point (project_random). 42 valide à la moitié.
+_PROJECT_PASS_MARK = 50
+
 
 def _parse(s):
     if not s:
@@ -286,10 +290,14 @@ def sync_evaluations(pool, evaluations, users=None):
                             dedup_key=f"rush:{u.login}:{proj}"):
                 created += 1
         else:
-            # tout autre projet évalué → points random ± (1 fois par étudiant & projet)
-            if record_event(user=u, pool=pool, rule_key="project_random", occurred_at=occurred,
-                            context={"project": proj}, source=API,
-                            dedup_key=f"proj:{u.login}:{proj}"):
+            # Projet évalué générique → points random ±, UNE SEULE fois par projet
+            # (dedup) et SEULEMENT si le projet est VALIDÉ (note ≥ seuil). Une
+            # correction ratée ne crée rien → elle ne consomme pas le dedup, donc
+            # une re-correction réussie plus tard pourra bien attribuer les points.
+            if mark >= _PROJECT_PASS_MARK and record_event(
+                    user=u, pool=pool, rule_key="project_random", occurred_at=occurred,
+                    context={"project": proj, "mark": mark}, source=API,
+                    dedup_key=f"proj:{u.login}:{proj}"):
                 created += 1
             # bonus si le projet est validé PILE à 100
             if mark == 100 and record_event(
@@ -595,6 +603,14 @@ def fetch_scale_teams_range(client, campus_id, start_iso, end_iso, cursus_id=Non
         begin, filled = st.get("begin_at"), st.get("filled_at")
         if corrector and comment:
             feedbacks.append({"id": sid, "login": corrector, "comment": comment, "created_at": filled})
+
+        # Un scale_team NON REMPLI (filled_at absent) = correction jamais réalisée :
+        # booking expiré ou projet « give up » tout seul après ~1 jour sans
+        # correcteur. On n'en tire NI éval, NI flag, NI couple de correction —
+        # sinon un give-up collait un flag bidon (ex : « Norme » sur shell 00,
+        # qui n'a pourtant pas de norme). Une vraie correction a toujours filled_at.
+        if not filled:
+            continue
 
         team = st.get("team") or {}
         project = _project_name(client, team.get("project_id"))
