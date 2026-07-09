@@ -170,6 +170,7 @@
     <div class="tab" data-tab="hosts">🖥 Places &amp; Hosts</div>
     <div class="tab" data-tab="sync">🔄 Synchronisation</div>
     <div class="tab" data-tab="plague">🦠 Peste &amp; Choléra</div>
+    <div class="tab" data-tab="curls">📡 Curls</div>
     <div class="tab" data-tab="data">📦 Données</div>
   </div>
 
@@ -357,6 +358,33 @@
     <div class="card" id="pl-recent"><div class="spin">Chargement…</div></div>
   </section>
 
+  <section class="pane" id="p-curls">
+    <div class="sec">Compteur de curls — chaque hit sur le leaderboard (racine &amp; /leaderboard) · mise à jour auto toutes les 3 s</div>
+    <div class="st4" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr));margin-top:0">
+      <div class="stbox"><div class="l">Total</div><div class="v" id="cu-total">—</div></div>
+      <div class="stbox"><div class="l">Aujourd'hui</div><div class="v" id="cu-today">—</div></div>
+      <div class="stbox"><div class="l">Dernière heure</div><div class="v" id="cu-hour">—</div></div>
+      <div class="stbox"><div class="l">Dernière minute</div><div class="v" id="cu-min">—</div></div>
+      <div class="stbox"><div class="l">IP uniques (auj.)</div><div class="v" id="cu-ips">—</div></div>
+    </div>
+    <div class="calc" style="margin:0 0 16px" id="cu-split"></div>
+    <div class="cols">
+      <div class="card">
+        <div class="hdr">📅 Par jour (14 derniers)</div>
+        <table><thead><tr><th>Jour</th><th class="num">Hits</th><th class="num">IP uniques</th></tr></thead>
+          <tbody id="cu-days"><tr><td colspan="3" class="spin">Chargement…</td></tr></tbody></table>
+      </div>
+      <div class="card">
+        <div class="hdr">🏆 Top IPs aujourd'hui</div>
+        <div id="cu-top"><div class="spin">Chargement…</div></div>
+      </div>
+    </div>
+    <div class="sec" style="margin-top:22px">Derniers hits</div>
+    <div class="card"><table><thead><tr>
+      <th>Heure</th><th>IP</th><th>Endpoint</th><th>Client</th><th>User-Agent</th>
+    </tr></thead><tbody id="cu-recent"><tr><td colspan="5" class="spin">Chargement…</td></tr></tbody></table></div>
+  </section>
+
   <section class="pane" id="p-data">
     <div class="sec">Gestion des données par TYPE — reset / refetch chaque type indépendamment</div>
     <div class="bar">
@@ -407,10 +435,10 @@ const esc=s=>String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>
 
 /* ── tabs : init (bind) une seule fois, refresh (données) à CHAQUE retour ── */
 const inited={};
-const init={pools:initPools,users:loadUsers,logs:initLogs,points:loadPoints,days:initDays,hosts:initHosts,sync:initSync,plague:initPlague,data:initData};
+const init={pools:initPools,users:loadUsers,logs:initLogs,points:loadPoints,days:initDays,hosts:initHosts,sync:initSync,plague:initPlague,curls:initCurls,data:initData};
 const refresh={pools:loadPools,users:loadUsers,logs:loadLogs,points:loadPoints,
   days:()=>$('#day-pick').value&&loadDay(),hosts:loadHosts,
-  sync:()=>{refreshSync();loadAuto();},plague:loadPlague,data:loadData};
+  sync:()=>{refreshSync();loadAuto();},plague:loadPlague,curls:loadCurls,data:loadData};
 $$('.tab').forEach(t=>t.onclick=()=>{
   $$('.tab').forEach(x=>x.classList.toggle('on',x===t));
   $$('.pane').forEach(p=>p.classList.toggle('on',p.id==='p-'+t.dataset.tab));
@@ -869,7 +897,35 @@ async function saveSecret(){
   finally{b.disabled=false;}
 }
 
-/* ── 8. Données (gestion granulaire PAR TYPE, piscine par piscine) ── */
+/* ── 8. Curls (compteur live des hits leaderboard) ── */
+let curlTimer=null;
+function initCurls(){
+  loadCurls();
+  // Poll toutes les 3 s, mais UNIQUEMENT quand l'onglet est visible (pas de spam serveur).
+  if(!curlTimer)curlTimer=setInterval(()=>{if($('#p-curls').classList.contains('on'))loadCurls();},3000);
+}
+async function loadCurls(){
+  const d=await api('/panel/api/curls');
+  $('#cu-total').textContent=d.total;
+  $('#cu-today').textContent=d.today;
+  $('#cu-hour').textContent=d.last_hour;
+  $('#cu-min').textContent=d.last_minute;
+  $('#cu-ips').textContent=d.unique_ips_today;
+  $('#cu-split').innerHTML=`Aujourd'hui : <b>${d.today_cli}</b> via curl/terminal · <b>${d.today-d.today_cli}</b> via navigateur`;
+  $('#cu-days').innerHTML=d.per_day.length?d.per_day.map(r=>`<tr>
+      <td class="meta">${r.day}</td><td class="num">${r.hits}</td><td class="num">${r.ips}</td></tr>`).join('')
+    :'<tr><td colspan="3" class="empty">Aucun hit pour l\'instant.</td></tr>';
+  $('#cu-top').innerHTML=d.top_ips.length?d.top_ips.map(r=>`<div class="host">
+      <span class="hn">${esc(r.ip)}</span><span class="meta"><b>${r.hits}</b> hit(s)</span></div>`).join('')
+    :'<div class="empty">Aucun hit aujourd\'hui.</div>';
+  $('#cu-recent').innerHTML=d.recent.length?d.recent.map(r=>`<tr>
+      <td class="meta">${r.at}</td><td><b>${esc(r.ip)}</b></td><td class="meta">${esc(r.endpoint)}</td>
+      <td>${r.cli?'<span class="chip gain">curl</span>':'<span class="chip event">navigateur</span>'}</td>
+      <td class="meta" style="max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.ua)||'—'}</td></tr>`).join('')
+    :'<tr><td colspan="5" class="empty">Aucun hit pour l\'instant — fais un <code>curl</code> sur le site !</td></tr>';
+}
+
+/* ── 9. Données (gestion granulaire PAR TYPE, piscine par piscine) ── */
 const SRC={api:'🌐 API 42',sheet:'📄 Google Sheet',random:'🎲 Tirage local'};
 let dtPoolId=null;
 async function initData(){

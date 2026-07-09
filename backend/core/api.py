@@ -965,3 +965,53 @@ def api_plague(request):
     cfg.save(update_fields=["plague_payout"])
     res = plague_endgame(pool)  # ré-applique le boost avec le nouveau montant
     return JsonResponse({"ok": True, "points_per_person": float(cfg.plague_payout), "endgame": res})
+
+
+# ─────────────────────────── 8. Curls ───────────────────────────
+@staff_required
+def api_curls(request):
+    """
+    Onglet Curls : compteur EN DIRECT des hits leaderboard (CurlTracking).
+    Total / aujourd'hui / dernière heure / dernière minute, split curl vs
+    navigateur, série par jour, top IPs du jour et derniers hits.
+    """
+    from .models import CurlTracking
+    from .views import _CLI_AGENTS
+
+    now = timezone.now()
+    today = timezone.localdate()
+    qs = CurlTracking.objects.all()
+    today_qs = qs.filter(day=today)
+
+    # Même heuristique que la vue racine : UA vide ou contenant curl/wget/… = CLI.
+    cli_q = Q(user_agent="")
+    for tok in _CLI_AGENTS:
+        cli_q |= Q(user_agent__icontains=tok)
+
+    def _is_cli(ua):
+        ua = (ua or "").lower()
+        return not ua or any(tok in ua for tok in _CLI_AGENTS)
+
+    per_day = (qs.values("day")
+               .annotate(n=Count("id"), ips=Count("ip", distinct=True))
+               .order_by("-day")[:14])
+    top_ips = (today_qs.values("ip")
+               .annotate(n=Count("id"))
+               .order_by("-n")[:8])
+    recent = qs.order_by("-requested_at")[:25]
+
+    return JsonResponse({
+        "total": qs.count(),
+        "today": today_qs.count(),
+        "today_cli": today_qs.filter(cli_q).count(),
+        "last_hour": qs.filter(requested_at__gte=now - timedelta(hours=1)).count(),
+        "last_minute": qs.filter(requested_at__gte=now - timedelta(minutes=1)).count(),
+        "unique_ips_today": today_qs.values("ip").distinct().count(),
+        "per_day": [{"day": str(r["day"]), "hits": r["n"], "ips": r["ips"]} for r in per_day],
+        "top_ips": [{"ip": r["ip"], "hits": r["n"]} for r in top_ips],
+        "recent": [{
+            "at": _local(c.requested_at, "%d/%m %H:%M:%S"),
+            "ip": c.ip, "endpoint": c.endpoint,
+            "cli": _is_cli(c.user_agent), "ua": c.user_agent[:120],
+        } for c in recent],
+    })
