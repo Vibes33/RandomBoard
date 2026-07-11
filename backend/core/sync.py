@@ -68,6 +68,42 @@ def _cap_to_day(dt, day):
     return min(max(dt, lo), hi)
 
 
+def _split_by_day(b, e):
+    """
+    Découpe une session [b, e] en tranches par JOUR LOCAL, avec découpe à minuit.
+    Renvoie [(day, minutes, end_dans_le_jour), …]. Sans cette découpe, une session
+    à cheval sur minuit était créditée EN ENTIER au jour de son begin_at : le jour
+    J était gonflé des heures d'après-minuit, et le jour J+1 vidé — ce qui pouvait
+    offrir le jackpot logtime_minute à un étudiant présent toute la journée
+    (incident prod 07/2026).
+    """
+    out = []
+    d, last = timezone.localdate(b), timezone.localdate(e)
+    while d <= last:
+        lo = timezone.make_aware(datetime.combine(d, dtime.min))
+        hi = timezone.make_aware(datetime.combine(d + timedelta(days=1), dtime.min))
+        end_in_day = min(e, hi)
+        sec = (end_in_day - max(b, lo)).total_seconds()
+        if sec > 0:
+            out.append((d, sec / 60.0, end_in_day))
+        d += timedelta(days=1)
+    return out
+
+
+def locs_beginning_on(locations, day):
+    """
+    Locations (normalisées) dont le begin_at tombe le jour LOCAL `day`. Sert aux
+    consommateurs « à la connexion » (sync_host_effects) quand la fenêtre de
+    fetch est élargie à la veille : ils ne doivent voir que les connexions du jour.
+    """
+    out = []
+    for loc in locations:
+        b = _parse(loc.get("begin_at"))
+        if b and timezone.localdate(b) == day:
+            out.append(loc)
+    return out
+
+
 def _cluster_of(host_list):
     """Extrait le cluster d'un poste (ex: 'c1r2p3' → 'c1'). '' si introuvable."""
     for h in host_list:
@@ -115,17 +151,28 @@ def _weekday_streak(presence, user_id, day):
 # ─────────────────────────────────────────────────────────────
 # MAP : locations → logtime, midnight bonus, reconnexion même PC
 # ─────────────────────────────────────────────────────────────
-def sync_locations(pool, locations, users=None, *, score_cumulative=True):
+def sync_locations(pool, locations, users=None, *, score_cumulative=True,
+                   only_days=None):
     """
     score_cumulative=False (jour EN COURS) : on agrège la présence (workstations,
     cluster, reconnexion — discrets) mais on ne donne AUCUN point de la famille
     logtime (total non figé). Les points logtime tombent à minuit, quand le jour
     est final (score_cumulative=True), via tasks.nightly_snapshot.
+
+    only_days : ensemble de dates à scorer (None = toutes celles du payload).
+    Indispensable quand la fenêtre de fetch est élargie à la veille (pour capter
+    les sessions à cheval sur minuit) : les tranches qui retombent sur J-1 ou
+    J+1 ne doivent pas être re-scorées ici — J-1 est déjà figé (re-void + re-roll
+    du random changerait des scores snapshotés) et J+1 sera scoré par SON fetch.
+
+    Le logtime d'un jour = somme des tranches de sessions DÉCOUPÉES À MINUIT
+    (cf. _split_by_day) : une session 23h → 3h crédite 1 h au jour J et 3 h au
+    jour J+1, jamais 4 h au jour J.
     """
     users = users or _users(pool)
     minutes = defaultdict(float)
-    hosts = defaultdict(list)
-    last_end = {}  # (uid, day) → fin de la DERNIÈRE session du jour (heure réelle)
+    hosts = defaultdict(list)   # (uid, jour du BEGIN) → postes (connexions du jour)
+    last_end = {}  # (uid, day) → fin de la DERNIÈRE tranche du jour (heure réelle)
     seen_hosts = set()
     created = 0
 
@@ -137,13 +184,15 @@ def sync_locations(pool, locations, users=None, *, score_cumulative=True):
         if not b:
             continue
         e = _parse(loc.get("end_at")) or timezone.now()
-        day = timezone.localdate(b)
         host = loc.get("host", "")
-        minutes[(u.id, day)] += max(0.0, (e - b).total_seconds() / 60)
-        hosts[(u.id, day)].append(host)
-        cur = last_end.get((u.id, day))
-        if cur is None or e > cur:
-            last_end[(u.id, day)] = e
+        # minutes découpées à minuit : chaque jour reçoit SA part de la session
+        for day, mins_part, end_in_day in _split_by_day(b, e):
+            minutes[(u.id, day)] += mins_part
+            cur = last_end.get((u.id, day))
+            if cur is None or end_in_day > cur:
+                last_end[(u.id, day)] = end_in_day
+        # postes/cluster/reconnexion : liés à la CONNEXION → jour du begin_at
+        hosts[(u.id, timezone.localdate(b))].append(host)
         if host:
             seen_hosts.add(host)
 
@@ -156,6 +205,8 @@ def sync_locations(pool, locations, users=None, *, score_cumulative=True):
     id_to_user = {u.id: u for u in users.values()}
     presence = _presence_set(pool)  # 1 requête, streaks calculés en mémoire
     for (uid, day), mins in minutes.items():
+        if only_days is not None and day not in only_days:
+            continue  # tranche hors cible (veille figée / lendemain pas encore dû)
         u = id_to_user[uid]
         # heure RÉELLE (dernière session du jour) au lieu d'un midi figé
         occurred = _cap_to_day(last_end[(uid, day)], day)
@@ -170,10 +221,12 @@ def sync_locations(pool, locations, users=None, *, score_cumulative=True):
             presence.add((uid, day))  # marque la présence du jour (pour l'assiduité)
 
             # Jackpot de la minute : logtime TOTAL du jour = 1 min pile → gros bonus.
+            # « Pile » = la minute entière affichée : 60 s ≤ total < 120 s.
+            # (avant : round(mins) == 1 acceptait de 31 s à 89 s — trop laxiste)
             _void_daily(u, pool, "logtime_minute", day)
-            if round(mins) == 1:
+            if 1.0 <= mins < 2.0:
                 record_event(user=u, pool=pool, rule_key="logtime_minute", occurred_at=occurred,
-                             context={"minutes": round(mins)}, source=API)
+                             context={"minutes": round(mins, 2)}, source=API)
                 created += 1
 
             # Malus des 14 h : au-delà de 840 min sur la journée → malus FIXE unique.
@@ -183,10 +236,10 @@ def sync_locations(pool, locations, users=None, *, score_cumulative=True):
                              context={"minutes": round(mins)}, source=API)
                 created += 1
 
-            # Bonus « minuit » : logtime TOTAL du jour entre 23h50 et 23h59 (1430–
-            # 1439 min, soit quasi 24 h de log) → points FIXES (config).
+            # Bonus « minuit » : logtime TOTAL du jour entre 23h50 et 23h59, soit
+            # 1430 min ≤ total < 1440 min (minute entière, même logique que le jackpot).
             _void_daily(u, pool, "midnight_bonus", day)
-            if 1430 <= round(mins) <= 1439:
+            if 1430 <= mins < 1440:
                 record_event(user=u, pool=pool, rule_key="midnight_bonus", occurred_at=occurred,
                              context={"minutes": round(mins)}, source=API)
                 created += 1
@@ -214,9 +267,13 @@ def sync_locations(pool, locations, users=None, *, score_cumulative=True):
 
     # reconnexion sur le MÊME pc dans la journée
     for (uid, day), hlist in hosts.items():
+        if only_days is not None and day not in only_days:
+            continue  # connexions de la veille (fenêtre élargie) : jour déjà figé
         if len(hlist) != len(set(hlist)):
             u = id_to_user[uid]
-            occurred = _cap_to_day(last_end[(uid, day)], day)
+            # fallback midi : sessions de durée nulle → aucune tranche dans last_end
+            fallback = timezone.make_aware(datetime.combine(day, dtime(12, 0)))
+            occurred = _cap_to_day(last_end.get((uid, day), fallback), day)
             _void_daily(u, pool, "reconnect_same_pc", day)
             record_event(user=u, pool=pool, rule_key="reconnect_same_pc", occurred_at=occurred,
                          context={}, source=API)
@@ -796,7 +853,8 @@ def _day_bounds_utc(day):
     return start.strftime(fmt), end.strftime(fmt)
 
 
-def fetch_day(client, campus_id, day, cursus_id=None, parallel=False):
+def fetch_day(client, campus_id, day, cursus_id=None, parallel=False,
+              loc_lookback_days=0):
     """
     Récupère TOUTES les données d'un jour, en séparant clairement les deux
     familles de requêtes :
@@ -806,16 +864,24 @@ def fetch_day(client, campus_id, day, cursus_id=None, parallel=False):
     le live (1 seul jour). En rejeu multi-jours on préfère False et on
     parallélise plutôt AU NIVEAU DES JOURS (voir sync_runner) pour ne pas
     sur-solliciter le pool de clés.
+
+    loc_lookback_days : élargit la fenêtre des LOCATIONS de N jours en arrière
+    (l'API filtre sur begin_at). Nécessaire pour scorer un jour terminé : une
+    session commencée la veille à 23 h et finie à 3 h n'a pas de begin_at dans
+    le jour cible — sans lookback elle est invisible et le logtime du jour est
+    faux (cf. _split_by_day). Les scale_teams gardent la fenêtre du jour seul.
     """
     start, end = _day_bounds_utc(day)
+    loc_start = start if not loc_lookback_days else \
+        _day_bounds_utc(day - timedelta(days=loc_lookback_days))[0]
     if parallel:
         with ThreadPoolExecutor(max_workers=2) as ex:
-            f_loc = ex.submit(fetch_locations_range, client, campus_id, start, end)
+            f_loc = ex.submit(fetch_locations_range, client, campus_id, loc_start, end)
             f_scale = ex.submit(fetch_scale_teams_range, client, campus_id, start, end,
                                 cursus_id=cursus_id)
             locations, scale = f_loc.result(), f_scale.result()
     else:
-        locations = fetch_locations_range(client, campus_id, start, end)
+        locations = fetch_locations_range(client, campus_id, loc_start, end)
         scale = fetch_scale_teams_range(client, campus_id, start, end, cursus_id=cursus_id)
     return {"locations": locations, **scale}
 

@@ -22,9 +22,9 @@ from .ft_api import NETWORK_ERRORS, FtRateLimit, FtServerError
 from .models import DailyDesignation, DailySnapshot, Pool
 from .services import snapshot_day
 from .sync import (
-    fetch_campus_users, fetch_day, fetch_exam_windows, sync_evaluations,
-    sync_exam_time, sync_feedbacks, sync_flags, sync_host_effects, sync_last_day,
-    sync_locations, sync_users,
+    fetch_campus_users, fetch_day, fetch_exam_windows, locs_beginning_on,
+    sync_evaluations, sync_exam_time, sync_feedbacks, sync_flags,
+    sync_host_effects, sync_last_day, sync_locations, sync_users,
 )
 
 MONTHS = {m.lower(): i for i, m in enumerate(calendar.month_name) if m}
@@ -163,7 +163,10 @@ def run_full_sync(*, client, pool, campus, cursus, d_from=None, d_to=None,
 
         def _scoped_fetch(d):
             start, end = _day_bounds_utc(d)
-            locs = fetch_locations_range(client, campus, start, end) if need_loc else []
+            # locations : fenêtre élargie à la veille pour capter les sessions à
+            # cheval sur minuit (découpe + only_days côté sync_locations)
+            loc_start = _day_bounds_utc(d - dt.timedelta(days=1))[0]
+            locs = fetch_locations_range(client, campus, loc_start, end) if need_loc else []
             scale = (fetch_scale_teams_range(client, campus, start, end, cursus_id=cursus)
                      if need_scale else
                      {"feedbacks": [], "evaluations": [], "flags": [], "pairs": []})
@@ -193,7 +196,8 @@ def run_full_sync(*, client, pool, campus, cursus, d_from=None, d_to=None,
             #                     courant/futur) : seulement les events discrets.
             n = 0
             if want("locations"):  # logtime + reconnexion + cluster
-                n += sync_locations(pool, p["locations"], users, score_cumulative=final)
+                n += sync_locations(pool, p["locations"], users, score_cumulative=final,
+                                    only_days={d})
             if want("feedbacks"):
                 n += sync_feedbacks(pool, p["feedbacks"], users)
             if want("evaluations"):
@@ -201,8 +205,9 @@ def run_full_sync(*, client, pool, campus, cursus, d_from=None, d_to=None,
                 n += sync_last_day(pool, d, p.get("pairs", []), users)
             if want("flags"):
                 n += sync_flags(pool, p["flags"], users)
-            if want("hosts"):
-                n += sync_host_effects(pool, d, p["locations"], p.get("pairs", []), users)
+            if want("hosts"):  # effet « à la connexion » → connexions DU jour seulement
+                n += sync_host_effects(pool, d, locs_beginning_on(p["locations"], d),
+                                       p.get("pairs", []), users)
             if want("exam") and final:  # exam_time = malus basé sur le temps → jour final
                 n += sync_exam_time(pool, d, p["locations"], exam_windows, users)
             if want("plague"):

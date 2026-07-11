@@ -120,8 +120,9 @@ def nightly_snapshot():
     from .chaos import apply_stacking
     from .derived import (apply_designation_effects, apply_exam_regression,
                           apply_podium_tax, _exam_days)
-    from .sync import (_users, fetch_exam_windows, sync_evaluations, sync_exam_time,
-                       sync_feedbacks, sync_flags, sync_host_effects, sync_last_day,
+    from .sync import (_users, fetch_exam_windows, locs_beginning_on,
+                       sync_evaluations, sync_exam_time, sync_feedbacks,
+                       sync_flags, sync_host_effects, sync_last_day,
                        sync_locations)
     from .sync import fetch_day
     logger = logging.getLogger(__name__)
@@ -135,13 +136,20 @@ def nightly_snapshot():
             campus = pool.campus_id or settings.FT_CAMPUS_ID
             cursus = pool.cursus_id or settings.FT_CURSUS_ID
             try:
-                p = fetch_day(client, campus, yesterday, cursus_id=cursus, parallel=True)
+                # lookback 1 jour : capte les sessions commencées l'avant-veille
+                # qui débordent sur la veille (découpées à minuit par sync_locations)
+                p = fetch_day(client, campus, yesterday, cursus_id=cursus, parallel=True,
+                              loc_lookback_days=1)
                 users = _users(pool)
-                sync_locations(pool, p["locations"], users, score_cumulative=True)
+                sync_locations(pool, p["locations"], users, score_cumulative=True,
+                               only_days={yesterday})
                 sync_feedbacks(pool, p["feedbacks"], users)
                 sync_evaluations(pool, p["evaluations"], users)
                 sync_flags(pool, p["flags"], users)
-                sync_host_effects(pool, yesterday, p["locations"], p.get("pairs", []), users)
+                # effets « à la connexion » : uniquement les connexions DU jour
+                sync_host_effects(pool, yesterday,
+                                  locs_beginning_on(p["locations"], yesterday),
+                                  p.get("pairs", []), users)
                 try:
                     windows = fetch_exam_windows(client, campus, cursus)
                 except Exception:  # noqa: BLE001 — exam_time ignoré si l'endpoint échoue
