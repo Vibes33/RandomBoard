@@ -90,6 +90,12 @@ def run_sync(sync_run_id):
             run.status = SyncRun.Status.DONE
             run.days_done = run.days_total = summary["total_days"]
             run.append_log(f"Terminé · {summary['total_events']} events ingérés.")
+            # Jours abandonnés après retries : le run reste DONE mais l'échec est
+            # affiché en rouge au panel (avant : trous silencieux → streaks cassées).
+            if summary.get("failed_days"):
+                run.error = ("Jours NON ingérés (API en échec) : "
+                             + ", ".join(summary["failed_days"])
+                             + " — relancer un refetch sur cette période.")
         run.save()
         return {"ok": True, "cancelled": summary["cancelled"], "events": summary["total_events"]}
     except Exception as ex:  # noqa: BLE001

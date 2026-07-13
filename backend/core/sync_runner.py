@@ -13,6 +13,7 @@ optionnels remontent l'avancement :
 """
 import calendar
 import datetime as dt
+import time
 from concurrent.futures import ThreadPoolExecutor
 
 from django.conf import settings
@@ -126,6 +127,7 @@ def run_full_sync(*, client, pool, campus, cursus, d_from=None, d_to=None,
         f"· fetch parallèle ×{workers}")
     fetch_errors = (FtRateLimit, FtServerError) + NETWORK_ERRORS
     idx, total_events, cancelled = 0, 0, False
+    failed_days = []  # jours abandonnés après retries → remontés en fin de run
 
     if want("plague"):
         from .chaos import seed_plague
@@ -166,11 +168,20 @@ def run_full_sync(*, client, pool, campus, cursus, d_from=None, d_to=None,
             # locations : fenêtre élargie à la veille pour capter les sessions à
             # cheval sur minuit (découpe + only_days côté sync_locations)
             loc_start = _day_bounds_utc(d - dt.timedelta(days=1))[0]
-            locs = fetch_locations_range(client, campus, loc_start, end) if need_loc else []
-            scale = (fetch_scale_teams_range(client, campus, start, end, cursus_id=cursus)
-                     if need_scale else
-                     {"feedbacks": [], "evaluations": [], "flags": [], "pairs": []})
-            return {"locations": locs, **scale}
+            # 3 tentatives : un jour raté = trou dans l'historique (points du jour
+            # perdus), ça vaut deux retries avec pause avant d'abandonner.
+            last_exc = None
+            for attempt in range(3):
+                try:
+                    locs = fetch_locations_range(client, campus, loc_start, end) if need_loc else []
+                    scale = (fetch_scale_teams_range(client, campus, start, end, cursus_id=cursus)
+                             if need_scale else
+                             {"feedbacks": [], "evaluations": [], "flags": [], "pairs": []})
+                    return {"locations": locs, **scale}
+                except fetch_errors as exf:
+                    last_exc = exf
+                    time.sleep(3 * (attempt + 1))
+            raise last_exc
 
         payloads = {}
         with ThreadPoolExecutor(max_workers=workers) as pool_ex:
@@ -189,7 +200,8 @@ def run_full_sync(*, client, pool, campus, cursus, d_from=None, d_to=None,
             idx += 1
             p = payloads.get(d)
             if isinstance(p, Exception):
-                log(f"{d} · API indisponible ({p}) — jour ignoré")
+                failed_days.append(d)
+                log(f"⚠️ {d} · API indisponible après 3 tentatives ({p}) — jour NON ingéré")
                 prog(day=d, index=idx, total=total_days, events=total_events)
                 continue
             final = d < today  # jour terminé → logtime + clôture ; sinon (jour
@@ -247,5 +259,11 @@ def run_full_sync(*, client, pool, campus, cursus, d_from=None, d_to=None,
         from .chaos import plague_endgame
         plague_endgame(pool)
 
+    if failed_days:
+        log(f"⚠️ {len(failed_days)} jour(s) en échec : "
+            f"{', '.join(str(d) for d in failed_days)} — points de ces jours absents, "
+            "relance un refetch sur cette période (puis `heal_streaks` si besoin).")
+
     return {"d_from": d_from, "d_to": d_to, "total_days": total_days,
-            "total_events": total_events, "users": len(users), "cancelled": cancelled}
+            "total_events": total_events, "users": len(users), "cancelled": cancelled,
+            "failed_days": [str(d) for d in failed_days]}

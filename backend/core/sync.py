@@ -23,7 +23,7 @@ from datetime import date, datetime, time as dtime, timedelta, timezone as dttz
 from django.utils import timezone
 
 from .engine import record_event
-from .models import AppUser, DailyHost, EventLog, Pool, Workstation
+from .models import AppUser, DailyHost, DailyPresence, EventLog, Pool, Workstation
 
 log = logging.getLogger(__name__)
 API = EventLog.Source.API_42
@@ -119,14 +119,13 @@ def _presence_set(pool):
     Sert au calcul des streaks en mémoire (avant : 1 requête SQL par jour de
     streak × par étudiant × par jour syncé — N+1 massif en fin de piscine).
 
-    Source = events `assiduity_streak` (un par jour OUVRÉ de présence). Depuis le
-    retrait de `logtime_low` (07/2026), c'est le marqueur de présence persistant.
-    `_weekday_streak` ne consulte que les jours ouvrés → équivalent à l'ancien
-    marquage par logtime_low (qui existait aussi le week-end, jamais lu).
+    Source = DailyPresence, marqueur FACTUEL écrit dès qu'un jour a du logtime
+    (poll live inclus). Avant, la présence était déduite des events
+    assiduity_streak eux-mêmes : chaîne auto-référentielle où un seul jour sans
+    scoring (fetch de minuit raté, jour ignoré en replay) cassait les streaks
+    de tout le campus le lendemain.
     """
-    return set(EventLog.objects.filter(
-        pool=pool, event_type="assiduity_streak", is_voided=False
-    ).values_list("user_id", "event_date"))
+    return set(DailyPresence.objects.filter(pool=pool).values_list("user_id", "day"))
 
 
 def _weekday_streak(presence, user_id, day):
@@ -202,6 +201,16 @@ def sync_locations(pool, locations, users=None, *, score_cumulative=True,
             [Workstation(pool=pool, hostname=h, last_seen=timezone.localdate()) for h in seen_hosts],
             ignore_conflicts=True)
 
+    # Présence FACTUELLE : une ligne par (user, jour) ayant du logtime — y compris
+    # week-ends, jour courant (poll) et jours hors only_days (un fait n'est pas un
+    # score). Écrite AVANT le chargement du set : le jour scoré y figure déjà.
+    # Résilience : le poll du jour J écrit la présence en direct → si le fetch de
+    # minuit échoue, seuls les points de J manquent, la chaîne d'assiduité survit.
+    if minutes:
+        DailyPresence.objects.bulk_create(
+            [DailyPresence(pool=pool, user_id=uid, day=day) for (uid, day) in minutes],
+            ignore_conflicts=True)
+
     id_to_user = {u.id: u for u in users.values()}
     presence = _presence_set(pool)  # 1 requête, streaks calculés en mémoire
     for (uid, day), mins in minutes.items():
@@ -218,7 +227,7 @@ def sync_locations(pool, locations, users=None, *, score_cumulative=True,
             for rk in _LOGTIME_RULES:
                 _void_daily(u, pool, rk, day)
         else:
-            presence.add((uid, day))  # marque la présence du jour (pour l'assiduité)
+            # (la présence du jour est déjà dans le set : DailyPresence écrit plus haut)
 
             # Jackpot de la minute : logtime TOTAL du jour = 1 min pile → gros bonus.
             # « Pile » = la minute entière affichée : 60 s ≤ total < 120 s.

@@ -265,6 +265,30 @@ class DailySnapshot(models.Model):
         return f"{self.user.login} · {self.day} · cumul {self.cumulative_total}"
 
 
+class DailyPresence(models.Model):
+    """
+    Marqueur FACTUEL de présence : l'étudiant a eu du logtime ce jour-là
+    (week-ends inclus). Source de vérité des streaks d'assiduité, DÉCOUPLÉE du
+    scoring : avant, la présence était déduite des events assiduity_streak
+    eux-mêmes — chaîne auto-référentielle où une seule nuit de fetch raté
+    cassait les streaks de tout le campus. Écrit par sync_locations (poll live
+    inclus) ; jamais supprimé par les resets : un fait de présence reste vrai
+    même quand les events de points sont rejoués.
+    """
+    pool = models.ForeignKey(Pool, on_delete=models.CASCADE, related_name="presences")
+    user = models.ForeignKey(AppUser, on_delete=models.CASCADE, related_name="presences")
+    day = models.DateField(db_index=True)
+
+    class Meta:
+        verbose_name = "Présence quotidienne"
+        verbose_name_plural = "Présences quotidiennes"
+        unique_together = ("user", "day")
+        ordering = ("-day",)
+
+    def __str__(self):
+        return f"{self.user.login} · {self.day}"
+
+
 # ────────────────────────────────────────────────────────────────────
 # Tracking web + configs spéciales
 # ────────────────────────────────────────────────────────────────────
