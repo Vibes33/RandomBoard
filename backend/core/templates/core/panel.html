@@ -375,7 +375,7 @@
           <tbody id="cu-days"><tr><td colspan="3" class="spin">Chargement…</td></tr></tbody></table>
       </div>
       <div class="card">
-        <div class="hdr">🏆 Top IPs aujourd'hui</div>
+        <div class="hdr">🏆 Leaderboard des curls par pseudo</div>
         <div id="cu-top"><div class="spin">Chargement…</div></div>
       </div>
     </div>
@@ -915,9 +915,10 @@ async function loadCurls(){
   $('#cu-days').innerHTML=d.per_day.length?d.per_day.map(r=>`<tr>
       <td class="meta">${r.day}</td><td class="num">${r.hits}</td><td class="num">${r.ips}</td></tr>`).join('')
     :'<tr><td colspan="3" class="empty">Aucun hit pour l\'instant.</td></tr>';
-  $('#cu-top').innerHTML=d.top_ips.length?d.top_ips.map(r=>`<div class="host">
-      <span class="hn">${esc(r.ip)}</span><span class="meta"><b>${r.hits}</b> hit(s)</span></div>`).join('')
-    :'<div class="empty">Aucun hit aujourd\'hui.</div>';
+  $('#cu-top').innerHTML=d.top_logins.length?d.top_logins.map((r,i)=>`<div class="host">
+      <span class="hn"><span class="rk" style="display:inline-block">${i+1}</span> ${esc(r.login)}</span>
+      <span class="meta"><b>${r.hits}</b> curl(s)</span></div>`).join('')
+    :'<div class="empty">Aucun curl ciblant un pseudo connu (curl le site avec /&lt;login&gt;).</div>';
   $('#cu-recent').innerHTML=d.recent.length?d.recent.map(r=>`<tr>
       <td class="meta">${r.at}</td><td><b>${esc(r.ip)}</b></td><td class="meta">${esc(r.endpoint)}</td>
       <td>${r.cli?'<span class="chip gain">curl</span>':'<span class="chip event">navigateur</span>'}</td>

@@ -973,7 +973,11 @@ def api_curls(request):
     """
     Onglet Curls : compteur EN DIRECT des hits leaderboard (CurlTracking).
     Total / aujourd'hui / dernière heure / dernière minute, split curl vs
-    navigateur, série par jour, top IPs du jour et derniers hits.
+    navigateur, série par jour, classement des curls PAR PSEUDO et derniers hits.
+
+    Attribution par pseudo : un curl n'est pas authentifié, mais `curl site/<login>`
+    stocke `endpoint = /<login>`. On compte donc combien de fois le board de chaque
+    pseudo connu (roster de la piscine active) a été ciblé.
     """
     from .models import CurlTracking
     from .views import _CLI_AGENTS
@@ -995,10 +999,23 @@ def api_curls(request):
     per_day = (qs.values("day")
                .annotate(n=Count("id"), ips=Count("ip", distinct=True))
                .order_by("-day")[:14])
-    top_ips = (today_qs.values("ip")
-               .annotate(n=Count("id"))
-               .order_by("-n")[:8])
     recent = qs.order_by("-requested_at")[:25]
+
+    # Classement des curls PAR PSEUDO : endpoint `/<login>` (ou `/<login>/`) ramené
+    # au login, restreint aux pseudos connus de la piscine active. Comptage global
+    # (all-time) — c'est un vrai classement qui s'accumule, pas un instantané du jour.
+    pool = _pool()
+    # map login minuscule → login d'affichage (casse d'origine du roster)
+    login_display = {lg.lower(): lg for lg in
+                     (AppUser.objects.filter(pool=pool).values_list("login", flat=True)
+                      if pool else [])}
+    per_login = {}
+    if login_display:
+        for r in qs.values("endpoint").annotate(n=Count("id")):
+            key = (r["endpoint"] or "").strip("/").lower()
+            if key in login_display:
+                per_login[key] = per_login.get(key, 0) + r["n"]
+    top_logins = sorted(per_login.items(), key=lambda kv: (-kv[1], kv[0]))[:10]
 
     return JsonResponse({
         "total": qs.count(),
@@ -1008,7 +1025,7 @@ def api_curls(request):
         "last_minute": qs.filter(requested_at__gte=now - timedelta(minutes=1)).count(),
         "unique_ips_today": today_qs.values("ip").distinct().count(),
         "per_day": [{"day": str(r["day"]), "hits": r["n"], "ips": r["ips"]} for r in per_day],
-        "top_ips": [{"ip": r["ip"], "hits": r["n"]} for r in top_ips],
+        "top_logins": [{"login": login_display[k], "hits": n} for k, n in top_logins],
         "recent": [{
             "at": _local(c.requested_at, "%d/%m %H:%M:%S"),
             "ip": c.ip, "endpoint": c.endpoint,
