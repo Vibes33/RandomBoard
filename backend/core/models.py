@@ -519,6 +519,27 @@ class Infection(models.Model):
         return f"{self.user.login} · {self.disease}"
 
 
+class Doctor(models.Model):
+    """
+    Docteur : soigne la Peste & le Choléra PAR CORRECTION (symétrique de la
+    contagion — cf. chaos._spread). Désigné MANUELLEMENT au panel parmi les
+    étudiants actifs, et IMMUNISÉ : il ne peut jamais être infecté (sa
+    nomination le guérit s'il l'était déjà).
+    """
+    pool = models.ForeignKey(Pool, on_delete=models.CASCADE, related_name="doctors")
+    user = models.ForeignKey(AppUser, on_delete=models.CASCADE, related_name="doctor_roles")
+    appointed_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = "Docteur"
+        verbose_name_plural = "Docteurs"
+        unique_together = ("pool", "user")
+        ordering = ("user__login",)
+
+    def __str__(self):
+        return f"Dr. {self.user.login}"
+
+
 class StackLedger(models.Model):
     """Cumul des points « empilés » (retenus faute d'avoir corrigé) par étudiant."""
     pool = models.ForeignKey(Pool, on_delete=models.CASCADE, related_name="stacks")

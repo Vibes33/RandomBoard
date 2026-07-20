@@ -329,6 +329,7 @@
         <span>Infectés <b id="pl-inf">—</b></span>
         <span>Sains <b id="pl-healthy">—</b></span>
         <span>Total <b id="pl-total">—</b></span>
+        <span>🩺 Guéris <b id="pl-healed">—</b></span>
         <span>Coalition en tête <b id="pl-leader">—</b></span>
       </div>
       <div class="prog"><i id="pl-bar" style="width:0%"></i></div>
@@ -352,6 +353,21 @@
       <input type="number" id="pl-secret" step="0.5" min="0" max="100" style="width:110px">
       <button class="mini" id="pl-secret-save">💾 Enregistrer</button>
       <span class="calc">chance qu'un <code>curl</code> affiche tous les pseudos en « dedavid »</span>
+    </div>
+
+    <div class="sec" style="margin-top:22px">🩺 Docteurs — soignent par correction, immunisés</div>
+    <div class="card" style="padding:16px;margin-bottom:16px">
+      <div class="bar" style="margin:0">
+        <input id="dr-search" list="dr-list" placeholder="login de l'étudiant…" style="width:220px" autocomplete="off">
+        <datalist id="dr-list"></datalist>
+        <button class="mini" id="dr-add">➕ Nommer docteur</button>
+        <span class="calc" id="dr-info"></span>
+      </div>
+      <div class="calc" style="margin-top:8px">
+        Un docteur qui corrige (ou est corrigé par) un infecté le <b>guérit</b> : le docteur
+        et le soigné gagnent des points (réglables dans « Options de Points »).
+        La nomination guérit immédiatement l'étudiant s'il était infecté.</div>
+      <div id="dr-tb" style="margin-top:10px"><div class="spin">Chargement…</div></div>
     </div>
 
     <div class="sec" style="margin-top:22px">Infections récentes</div>
@@ -438,7 +454,8 @@ const inited={};
 const init={pools:initPools,users:loadUsers,logs:initLogs,points:loadPoints,days:initDays,hosts:initHosts,sync:initSync,plague:initPlague,curls:initCurls,data:initData};
 const refresh={pools:loadPools,users:loadUsers,logs:loadLogs,points:loadPoints,
   days:()=>$('#day-pick').value&&loadDay(),hosts:loadHosts,
-  sync:()=>{refreshSync();loadAuto();},plague:loadPlague,curls:loadCurls,data:loadData};
+  sync:()=>{refreshSync();loadAuto();},plague:()=>{loadPlague();loadDoctors();},
+  curls:loadCurls,data:loadData};
 $$('.tab').forEach(t=>t.onclick=()=>{
   $$('.tab').forEach(x=>x.classList.toggle('on',x===t));
   $$('.pane').forEach(p=>p.classList.toggle('on',p.id==='p-'+t.dataset.tab));
@@ -863,12 +880,42 @@ async function cancelSync(){
 }
 
 /* ── 7. Peste & Choléra ── */
-async function initPlague(){ $('#pl-save').onclick=savePlague; $('#pl-secret-save').onclick=saveSecret; loadPlague(); }
+async function initPlague(){
+  $('#pl-save').onclick=savePlague; $('#pl-secret-save').onclick=saveSecret;
+  $('#dr-add').onclick=addDoctor;
+  $('#dr-search').addEventListener('keydown',e=>{if(e.key==='Enter')addDoctor();});
+  loadPlague(); loadDoctors();
+}
+async function loadDoctors(){
+  const d=await api('/panel/api/doctors');
+  $('#dr-list').innerHTML=d.candidates.map(c=>`<option value="${esc(c.login)}">`).join('');
+  $('#dr-info').textContent=`${d.doctors.length} docteur(s) · ${d.candidates.length} candidat(s)`;
+  $('#dr-tb').innerHTML=d.doctors.length?d.doctors.map(x=>`<div class="host">
+      <span class="hn">🩺 ${esc(x.login)} <span class="calc">${esc(x.name||'')}</span></span>
+      <span class="meta"><b>${x.heals}</b> soin(s)
+        <button class="mini danger" data-drdel="${x.id}" style="margin-left:10px">✕ Retirer</button></span>
+    </div>`).join('')
+    :'<div class="empty">Aucun docteur — nomme un étudiant ci-dessus.</div>';
+  $('#dr-tb').querySelectorAll('[data-drdel]').forEach(b=>b.onclick=()=>delDoctor(b.dataset.drdel));
+}
+async function addDoctor(){
+  const login=$('#dr-search').value.trim();
+  if(!login){toast('Entre un login',true);return;}
+  const r=await api('/panel/api/doctors','POST',{login,action:'add'});
+  toast(r.created?`🩺 ${r.login} nommé docteur`+(r.cured_on_appoint?' (et guéri)':'')
+                 :`${r.login} est déjà docteur`);
+  $('#dr-search').value=''; loadDoctors(); loadPlague();
+}
+async function delDoctor(id){
+  const r=await api('/panel/api/doctors','POST',{user_id:Number(id),action:'remove'});
+  toast(`${r.login} n'est plus docteur`); loadDoctors(); loadPlague();
+}
 async function loadPlague(){
   const {stats,points_per_person,secret_board_pct}=await api('/panel/api/plague');
   if(!stats){$('#pl-title').textContent='Aucune piscine active.';return;}
   $('#pl-inf').textContent=stats.infected;$('#pl-healthy').textContent=stats.healthy;
   $('#pl-total').textContent=stats.total;
+  $('#pl-healed').textContent=stats.healed!=null?stats.healed:'—';
   $('#pl-leader').textContent=stats.leader?({peste:' Peste',cholera:'💧 Choléra',égalité:'égalité'}[stats.leader]||stats.leader):'—';
   $('#pl-bar').style.width=stats.pct+'%';
   $('#pl-peste-n').textContent='· '+stats.peste.count+' inf.';

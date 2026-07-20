@@ -967,6 +967,53 @@ def api_plague(request):
     return JsonResponse({"ok": True, "points_per_person": float(cfg.plague_payout), "endgame": res})
 
 
+@staff_required
+@require_http_methods(["GET", "POST"])
+def api_doctors(request):
+    """
+    Docteurs 🩺 : désignation MANUELLE parmi les étudiants actifs. Ils soignent
+    la Peste & le Choléra par correction et sont immunisés.
+    GET  → docteurs actuels + candidats (roster actif).
+    POST → {login|user_id, action: "add"|"remove"}.
+    """
+    from .chaos import appoint_doctor, remove_doctor
+    from .models import Doctor
+    pool = _pool()
+    if not pool:
+        return JsonResponse({"doctors": [], "candidates": []})
+
+    if request.method == "GET":
+        docs = Doctor.objects.filter(pool=pool).select_related("user")
+        heals = {r["user_id"]: r["n"] for r in
+                 EventLog.objects.filter(pool=pool, event_type="doctor_heal", is_voided=False)
+                 .values("user_id").annotate(n=Count("id"))}
+        doc_ids = {d.user_id for d in docs}
+        return JsonResponse({
+            "doctors": [{"id": d.user_id, "login": d.user.login,
+                         "name": d.user.display_name, "heals": heals.get(d.user_id, 0)}
+                        for d in docs],
+            "candidates": [{"id": u.id, "login": u.login}
+                           for u in AppUser.objects.filter(pool=pool, is_active=True)
+                           .order_by("login") if u.id not in doc_ids],
+        })
+
+    data = _json(request)
+    user = AppUser.objects.filter(
+        pool=pool, **({"id": data["user_id"]} if data.get("user_id") else
+                      {"login": (data.get("login") or "").strip()})).first()
+    if not user:
+        return HttpResponseBadRequest("Étudiant introuvable dans la piscine active.")
+    if data.get("action") == "remove":
+        res = remove_doctor(pool, user)
+        AdminAuditLog.objects.create(staff=request.user, action="doctor_remove",
+                                     target=user.login)
+    else:
+        res = appoint_doctor(pool, user)
+        AdminAuditLog.objects.create(staff=request.user, action="doctor_add",
+                                     target=user.login, after=res)
+    return JsonResponse({"ok": True, **res})
+
+
 # ─────────────────────────── 8. Curls ───────────────────────────
 @staff_required
 def api_curls(request):

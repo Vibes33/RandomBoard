@@ -18,7 +18,7 @@ from django.db.models import Sum
 from django.utils import timezone
 
 from .engine import record_event
-from .models import AppUser, EventLog, Infection, PoolConfig, StackLedger
+from .models import AppUser, Doctor, EventLog, Infection, PoolConfig, StackLedger
 from .services import standings
 
 SYSTEM = EventLog.Source.SYSTEM
@@ -105,7 +105,10 @@ def seed_plague(pool, n_each=4):
     cfg = get_config(pool)
     if cfg.plague_seeded:
         return {"already": True}
-    users = list(AppUser.objects.filter(pool=pool, is_active=True))
+    # les docteurs sont immunisés : jamais patients zéro
+    doctors = set(Doctor.objects.filter(pool=pool).values_list("user_id", flat=True))
+    users = [u for u in AppUser.objects.filter(pool=pool, is_active=True)
+             if u.id not in doctors]
     random.shuffle(users)
     picks = users[:2 * n_each]
     rows = [
@@ -119,47 +122,103 @@ def seed_plague(pool, n_each=4):
     return {"peste": min(n_each, len(picks)), "cholera": max(0, len(picks) - n_each)}
 
 
-def _spread(state, pairs):
+def _spread(state, pairs, doctors=frozenset()):
     """
     PUR, une seule passe (chaque correction = un événement) :
+      - DOCTEUR + infecté   → l'infecté est GUÉRI (le docteur est immunisé) ;
       - infecté + sain      → le sain prend la maladie (propagation) ;
       - Peste + Choléra     → les deux ÉCHANGENT de maladie ;
       - même maladie / sains → rien.
-    state : {user_id: disease|None} (muté au fil des couples). pairs : [(a,b), …].
-    Renvoie [(user_id, disease, source_id, kind)] où kind ∈ {"infect","swap"}.
+    Un docteur ne peut ni être infecté ni échanger : tout couple qui l'implique
+    ne produit que des soins.
+    state : {user_id: disease|None} (muté au fil des couples).
+    pairs : [(a, b)] ou [(a, b, ref)] — ref = id scale_team (dédup des points).
+    Renvoie [(user_id, disease, source_id, kind, ref)], kind ∈ {infect,swap,heal}.
     """
     changes = []
-    for a, b in pairs:
+    for a, b, *rest in pairs:
+        ref = rest[0] if rest else None
         da, db = state.get(a), state.get(b)
+        if a in doctors or b in doctors:
+            # immunité + soin au contact (deux docteurs ensemble : rien)
+            if a in doctors and db:
+                state[b] = None
+                changes.append((b, None, a, "heal", ref))
+            if b in doctors and da:
+                state[a] = None
+                changes.append((a, None, b, "heal", ref))
+            continue
         if da and db:
             if da != db:  # choléra rencontre peste → échange
                 state[a], state[b] = db, da
-                changes.append((a, db, b, "swap"))
-                changes.append((b, da, a, "swap"))
+                changes.append((a, db, b, "swap", ref))
+                changes.append((b, da, a, "swap", ref))
         elif da and not db:
             state[b] = da
-            changes.append((b, da, a, "infect"))
+            changes.append((b, da, a, "infect", ref))
         elif db and not da:
             state[a] = db
-            changes.append((a, db, b, "infect"))
+            changes.append((a, db, b, "infect", ref))
     return changes
 
 
-def spread_plague(pool, pairs):
-    """Applique propagation + échanges sur des couples (correcteur_login, corrigé_login)."""
+def spread_plague(pool, pairs, day=None):
+    """
+    Applique propagation + échanges + SOINS sur des couples
+    (correcteur_login, corrigé_login, scale_team_id).
+
+    Les soins créent deux events de points (docteur + soigné), dédupliqués sur
+    l'id de la correction : un rejeu ne verse jamais deux fois les mêmes points
+    (la propagation, elle, reste non idempotente — cf. note projet).
+    """
     if not Infection.objects.filter(pool=pool).exists():
         return 0
-    users = {u.login: u.id for u in AppUser.objects.filter(pool=pool)}
-    id_pairs = [(users[a], users[b]) for a, b, *_ in pairs
-                if a in users and b in users and users[a] != users[b]]
+    users = {u.login: u for u in AppUser.objects.filter(pool=pool)}
+    ids = {lg: u.id for lg, u in users.items()}
+    id_pairs = [(ids[a], ids[b], (rest[0] if rest else None)) for a, b, *rest in pairs
+                if a in ids and b in ids and ids[a] != ids[b]]
+    doctors = set(Doctor.objects.filter(pool=pool).values_list("user_id", flat=True))
+    by_id = {u.id: u for u in users.values()}
     state = dict(Infection.objects.filter(pool=pool).values_list("user_id", "disease"))
-    for uid, disease, src, kind in _spread(state, id_pairs):
+    day = day or timezone.localdate()
+    for uid, disease, src, kind, ref in _spread(state, id_pairs, doctors):
         if kind == "infect":
             Infection.objects.get_or_create(
                 pool=pool, user_id=uid, defaults={"disease": disease, "source_id": src})
-        else:  # swap : on met simplement à jour la maladie
+        elif kind == "swap":
             Infection.objects.filter(pool=pool, user_id=uid).update(disease=disease)
+        else:  # heal : guérison + points au soigné ET au docteur
+            Infection.objects.filter(pool=pool, user_id=uid).delete()
+            tag = ref if ref is not None else f"{src}-{uid}-{day}"
+            patient, doc = by_id.get(uid), by_id.get(src)
+            if patient:
+                record_event(user=patient, pool=pool, rule_key="patient_healed",
+                             occurred_at=_noon(day), source=SYSTEM,
+                             context={"healed_by": doc.login if doc else None},
+                             dedup_key=f"healed:{tag}:{uid}")
+            if doc:
+                record_event(user=doc, pool=pool, rule_key="doctor_heal",
+                             occurred_at=_noon(day), source=SYSTEM,
+                             context={"patient": patient.login if patient else None},
+                             dedup_key=f"heal:{tag}:{uid}")
     return len(id_pairs)
+
+
+# ─────────────────────────── 4. Docteurs ───────────────────────────
+def appoint_doctor(pool, user):
+    """
+    Nomme un docteur (idempotent). Immunité immédiate : s'il était infecté, sa
+    nomination le GUÉRIT (sans points — ce n'est pas un soin par correction).
+    """
+    doc, created = Doctor.objects.get_or_create(pool=pool, user=user)
+    cured = Infection.objects.filter(pool=pool, user=user).delete()[0]
+    return {"login": user.login, "created": created, "cured_on_appoint": bool(cured)}
+
+
+def remove_doctor(pool, user):
+    """Retire le rôle de docteur (l'étudiant redevient contaminable)."""
+    n = Doctor.objects.filter(pool=pool, user=user).delete()[0]
+    return {"login": user.login, "removed": bool(n)}
 
 
 def plague_stats(pool):
@@ -182,12 +241,17 @@ def plague_stats(pool):
     if infected:
         leader = (Infection.Disease.PESTE if p["count"] > c["count"]
                   else Infection.Disease.CHOLERA if c["count"] > p["count"] else "égalité")
+    docs = list(Doctor.objects.filter(pool=pool).select_related("user"))
+    healed = EventLog.objects.filter(pool=pool, event_type="patient_healed",
+                                     is_voided=False).count()
     return {
         "total": total, "infected": infected,
         "healthy": max(0, total - infected),
         "pct": round(100 * infected / total) if total else 0,
         "peste": p, "cholera": c, "leader": leader,
         "payout_day": str(pool.ends_on),
+        "healed": healed,
+        "doctors": [{"id": d.user_id, "login": d.user.login} for d in docs],
         "recent": [{"login": i.user.login, "disease": i.disease,
                     "source": i.source.login if i.source else None,
                     "zero": i.is_patient_zero}

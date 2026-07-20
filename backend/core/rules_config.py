@@ -114,6 +114,11 @@ RULES = [
      {"type": "from_context", "value_key": "points"}),
     ("plague_payout", "event", "Peste & Choléra : gain du groupe vainqueur",
      {"type": "from_context", "value_key": "points"}),
+    # ─── Docteurs : soin par correction (docteur ↔ infecté) ───
+    ("doctor_heal", "gain", "Docteur : bonus par personne soignée",
+     {"type": "fixed", "points": 150}),
+    ("patient_healed", "gain", "Soigné par un docteur (guérison)",
+     {"type": "fixed", "points": 80}),
     # ─── trolls (Google Sheet Apps Script) : victime → malus niveau × semaine ───
     ("troll_victim", "loss", "Trollé sur son PC (points par niveau × semaine)",
      {"type": "level_week", "level_key": "level", "default": 0,
@@ -198,4 +203,6 @@ RULE_FIELDS = {
     "stacking_penalty": [],
     "stacking_buff": [],
     "plague_payout": [],
+    "doctor_heal": [_f("points", "Bonus au docteur par personne soignée")],
+    "patient_healed": [_f("points", "Bonus au soigné (guérison)")],
 }

@@ -36,6 +36,7 @@ urlpatterns = [
     path("panel/api/sync/status", api.api_sync_status),
     path("panel/api/sync/cancel", api.api_sync_cancel),
     path("panel/api/plague", api.api_plague),
+    path("panel/api/doctors", api.api_doctors),
     path("panel/api/curls", api.api_curls),
     path("panel/api/autosync", api.api_autosync),
     path("healthz", healthz),

@@ -142,10 +142,12 @@ def _ansi(colored):
 
 
 _DISEASE_EMOJI = {"peste": "🐀", "cholera": "💧"}
+# Docteur (immunisé, soigne par correction) — prioritaire sur tout badge maladie.
+_DOCTOR_EMOJI = "🩺"
 
 
 def _render_board(pool, board, colored=True, links=True, me=None, secret_chance=None,
-                  force_cols=None, diseases=None):
+                  force_cols=None, diseases=None, doctors=None):
     """
     Classement curl-able, TOUS les participants en grille multi-colonnes (jusqu'à
     5 colonnes côte à côte, ~20 lignes chacune) pour rester compact en largeur
@@ -182,15 +184,18 @@ def _render_board(pool, board, colored=True, links=True, me=None, secret_chance=
     my_row = None if secret else next(
         (r for r in shown if r["login"].lower() == me), None) if me else None
 
-    # Badges Peste 🐀 / Choléra 💧 par user (hors mode secret). Un slot de 3
-    # cellules d'affichage est réservé pour tous (emoji large = 2 cellules + 1
+    # Badges Docteur 🩺 / Peste 🐀 / Choléra 💧 par user (hors mode secret). Un slot
+    # de 3 cellules d'affichage est réservé pour tous (emoji large = 2 cellules + 1
     # espace, ou 3 espaces pour un sain) → l'alignement de la grille reste bon.
-    show_badges = bool(diseases) and not secret
+    doctors = doctors or set()
+    show_badges = bool(diseases or doctors) and not secret
 
     def badge(r):
         if not show_badges:
             return ""
-        emo = _DISEASE_EMOJI.get(diseases.get(r["login"]))
+        # docteur d'abord : il est immunisé, il ne porte jamais de maladie
+        emo = (_DOCTOR_EMOJI if r["login"] in doctors
+               else _DISEASE_EMOJI.get(diseases.get(r["login"]) if diseases else None))
         return f"{emo} " if emo else "   "  # 2 (emoji) + 1 espace, sinon 3 espaces
     bw = 3 if show_badges else 0
 
@@ -245,8 +250,14 @@ def _render_board(pool, board, colored=True, links=True, me=None, secret_chance=
         f"   {p['muted']}{scope}{p['reset']}",
         f"{indent}{p['muted']}{pool.name} · {pool.starts_on:%d/%m} → {pool.ends_on:%d/%m/%Y}{p['reset']}",
     ]
-    if show_badges:  # légende des badges d'infection
-        lines.append(f"{indent}{p['muted']}{p['reset']}")
+    if show_badges:  # légende des badges (docteur / infections)
+        leg = []
+        if doctors:
+            leg.append(f"{_DOCTOR_EMOJI} Docteur")
+        if diseases:
+            leg += [f"{_DISEASE_EMOJI['peste']} Peste",
+                    f"{_DISEASE_EMOJI['cholera']} Choléra"]
+        lines.append(f"{indent}{p['muted']}{'  ·  '.join(leg)}{p['reset']}")
     # Note « c'est toi » quand ?me= est fourni (rang + points, ou introuvable).
     if me and not secret:
         if my_row:
@@ -302,7 +313,7 @@ def leaderboard_preview(request, me=None):
         force_cols = None
     body = _render_board(pool, board, colored=colored, links=links, me=me,
                          secret_chance=chance, force_cols=force_cols,
-                         diseases=_disease_map(pool))
+                         diseases=_disease_map(pool), doctors=_doctor_set(pool))
     return HttpResponse(body, content_type="text/plain; charset=utf-8")
 
 
@@ -311,6 +322,12 @@ def _disease_map(pool):
     from .models import Infection
     return dict(Infection.objects.filter(pool=pool)
                 .values_list("user__login", "disease"))
+
+
+def _doctor_set(pool):
+    """{login} des docteurs (badge 🩺 du leaderboard)."""
+    from .models import Doctor
+    return set(Doctor.objects.filter(pool=pool).values_list("user__login", flat=True))
 
 
 def leaderboard_html(request, me=None):
@@ -333,13 +350,17 @@ def leaderboard_html(request, me=None):
     from .chaos import get_config
     secret = random.random() < float(get_config(pool).secret_board_chance)
     diseases = {} if secret else _disease_map(pool)
+    docs = set() if secret else _doctor_set(pool)
     rows = [{**r, "display": _SECRET_LOGIN if secret else r["login"],
              "hl": bool(me and not secret and r["login"].lower() == me),
-             "badge": _DISEASE_EMOJI.get(diseases.get(r["login"]), "")}
+             # docteur prioritaire : immunisé, jamais de badge maladie
+             "badge": (_DOCTOR_EMOJI if r["login"] in docs
+                       else _DISEASE_EMOJI.get(diseases.get(r["login"]), ""))}
             for r in board]
     my_row = None if secret else next(
         (r for r in board if r["login"].lower() == me), None) if me else None
     return render(request, "core/leaderboard.html", {
         "pool": pool, "rows": rows, "secret": secret, "me": me, "my_row": my_row,
-        "tips": _pool_tips(pool, timezone.localdate()), "has_badges": bool(diseases),
+        "tips": _pool_tips(pool, timezone.localdate()),
+        "has_badges": bool(diseases or docs), "has_doctors": bool(docs),
     })
