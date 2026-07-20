@@ -44,7 +44,6 @@
 <body>
   <h1>{% if secret %}✦ dedavid board ✦{% else %}✦ 42 — Leaderboard ✦{% endif %}</h1>
   <div class="sub">{{ pool.name }} · {{ pool.starts_on|date:"d/m" }} → {{ pool.ends_on|date:"d/m/Y" }} · {{ rows|length }} participants</div>
-  {% if has_badges %}<div class="sub">{% if has_doctors %}🩺 Docteur · {% endif %}🐀 Peste · 💧 Choléra</div>{% endif %}
   {% if me %}
     {% if my_row %}<div class="me">➤ toi : #{{ my_row.rank }} · {{ my_row.total|floatformat:0 }} pts</div>
     {% else %}<div class="me nf">(« {{ me }} » introuvable au classement)</div>{% endif %}
@@ -54,7 +53,7 @@
     {% for r in rows %}
     <div class="row r{{ r.rank }}{% if r.hl %} hl{% endif %}">
       <span class="rk">{{ r.rank }}</span>
-      <span class="lg">{% if r.badge %}<span class="badge" title="Docteur / Peste / Choléra">{{ r.badge }}</span> {% endif %}<a href="https://profile.intra.42.fr/users/{{ r.display }}" target="_blank" rel="noopener">{{ r.display }}</a></span>
+      <span class="lg">{% if r.badge %}<span class="badge">{{ r.badge }}</span> {% endif %}<a href="https://profile.intra.42.fr/users/{{ r.display }}" target="_blank" rel="noopener">{{ r.display }}</a></span>
       <span class="pt {% if r.total >= 0 %}pos{% else %}neg{% endif %}">{{ r.total|floatformat:0 }}</span>
     </div>
     {% endfor %}

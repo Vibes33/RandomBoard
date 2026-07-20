@@ -250,14 +250,8 @@ def _render_board(pool, board, colored=True, links=True, me=None, secret_chance=
         f"   {p['muted']}{scope}{p['reset']}",
         f"{indent}{p['muted']}{pool.name} · {pool.starts_on:%d/%m} → {pool.ends_on:%d/%m/%Y}{p['reset']}",
     ]
-    if show_badges:  # légende des badges (docteur / infections)
-        leg = []
-        if doctors:
-            leg.append(f"{_DOCTOR_EMOJI} Docteur")
-        if diseases:
-            leg += [f"{_DISEASE_EMOJI['peste']} Peste",
-                    f"{_DISEASE_EMOJI['cholera']} Choléra"]
-        lines.append(f"{indent}{p['muted']}{'  ·  '.join(leg)}{p['reset']}")
+    # (aucune légende des badges : la mécanique reste OPAQUE — les emoji
+    # 🩺/🐀/💧 s'affichent sans jamais être expliqués au joueur)
     # Note « c'est toi » quand ?me= est fourni (rang + points, ou introuvable).
     if me and not secret:
         if my_row:
@@ -362,5 +356,4 @@ def leaderboard_html(request, me=None):
     return render(request, "core/leaderboard.html", {
         "pool": pool, "rows": rows, "secret": secret, "me": me, "my_row": my_row,
         "tips": _pool_tips(pool, timezone.localdate()),
-        "has_badges": bool(diseases or docs), "has_doctors": bool(docs),
     })
